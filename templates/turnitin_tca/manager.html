@@ -1,0 +1,65 @@
+{% extends "admin/core/base.html" %}
+{% load foundation %}
+
+{% block page_title %}Turnitin Core API{% endblock page_title %}
+{% block title %}Turnitin Core API{% endblock %}
+{% block title-section %}Turnitin Core API{% endblock %}
+{% block title-sub %}Configure the Turnitin Core API integration{% endblock %}
+
+{% block breadcrumbs %}
+    {{ block.super }}
+    <li>Turnitin Core API</li>
+{% endblock %}
+
+{% block body %}
+    <div class="box">
+        <div class="title-area">
+            <h2>Settings</h2>
+        </div>
+        <div class="content">
+            <div class="row expanded">
+                <div class="large-7 columns">
+                    <form method="POST">
+                        {% csrf_token %}
+                        {{ admin_form|foundation }}
+                        <button class="button success" type="submit">
+                            <i class="fa fa-save">&nbsp;</i>Save
+                        </button>
+                    </form>
+                </div>
+                <div class="large-5 columns">
+                    <div class="callout">
+                        <h3>Webhook</h3>
+                        <p>Register this callback URL with Turnitin so reports notify
+                            Janeway when they are ready. A Base64 signing secret is
+                            generated automatically and used to verify callbacks.</p>
+                        <p><code>{{ webhook_url }}</code></p>
+                        {% if webhook_id %}
+                            <p class="label success">Registered (id {{ webhook_id }})</p>
+                        {% else %}
+                            <p class="label secondary">Not registered</p>
+                        {% endif %}
+                        <form method="POST" action="{% url 'turnitin_tca_register_webhook' %}">
+                            {% csrf_token %}
+                            <button class="button" type="submit">
+                                <i class="fa fa-link">&nbsp;</i>
+                                {% if webhook_id %}Re-register Webhook{% else %}Register Webhook{% endif %}
+                            </button>
+                        </form>
+                        <a class="button hollow" href="{% url 'turnitin_tca_webhooks' %}">
+                            <i class="fa fa-list">&nbsp;</i>Manage Webhooks
+                        </a>
+                    </div>
+                    <div class="callout">
+                        <h3>Connection</h3>
+                        <p>Verify your API URL and key against Turnitin.</p>
+                        <a class="button secondary"
+                           href="{% url 'turnitin_tca_test_connection' %}">
+                            <i class="fa fa-plug">&nbsp;</i>Test Connection
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+{% endblock body %}

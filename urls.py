@@ -1,0 +1,71 @@
+from django.urls import re_path
+
+from plugins.turnitin_tca import views
+
+urlpatterns = [
+    re_path(
+        r"^$",
+        views.manager,
+        name="turnitin_tca_manager",
+    ),
+    re_path(
+        r"^test-connection/$",
+        views.test_connection,
+        name="turnitin_tca_test_connection",
+    ),
+    re_path(
+        r"^register-webhook/$",
+        views.register_webhook,
+        name="turnitin_tca_register_webhook",
+    ),
+    re_path(
+        r"^webhooks/$",
+        views.webhooks,
+        name="turnitin_tca_webhooks",
+    ),
+    re_path(
+        r"^webhooks/delete-all/$",
+        views.delete_all_webhooks,
+        name="turnitin_tca_delete_all_webhooks",
+    ),
+    re_path(
+        r"^webhooks/(?P<webhook_id>[\w-]+)/delete/$",
+        views.delete_webhook,
+        name="turnitin_tca_delete_webhook",
+    ),
+    re_path(
+        r"^article/(?P<article_id>\d+)/$",
+        views.article_reports,
+        name="turnitin_tca_article",
+    ),
+    re_path(
+        r"^article/(?P<article_id>\d+)/send/(?P<file_id>\d+)/$",
+        views.send_file,
+        name="turnitin_tca_send_file",
+    ),
+    re_path(
+        r"^article/(?P<article_id>\d+)/resend-failed/$",
+        views.resend_failed,
+        name="turnitin_tca_resend_failed",
+    ),
+    re_path(
+        r"^article/(?P<article_id>\d+)/eula/$",
+        views.eula,
+        name="turnitin_tca_eula",
+    ),
+    re_path(
+        r"^article/(?P<article_id>\d+)/report/(?P<submission_id>\d+)/$",
+        views.view_report,
+        name="turnitin_tca_view_report",
+    ),
+    re_path(
+        r"^article/(?P<article_id>\d+)/regenerate/(?P<submission_id>\d+)/$",
+        views.regenerate_report,
+        name="turnitin_tca_regenerate_report",
+    ),
+    re_path(
+        r"^webhook/$",
+        views.webhook,
+        name="turnitin_tca_webhook",
+    ),
+]

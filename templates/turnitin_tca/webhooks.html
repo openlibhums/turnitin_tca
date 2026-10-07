@@ -1,0 +1,81 @@
+{% extends "admin/core/base.html" %}
+
+{% block page_title %}Turnitin Webhooks{% endblock page_title %}
+{% block title %}Turnitin Webhooks{% endblock %}
+{% block title-section %}Turnitin Webhooks{% endblock %}
+{% block title-sub %}Webhooks registered with Turnitin for this journal{% endblock %}
+
+{% block breadcrumbs %}
+    {{ block.super }}
+    <li><a href="{% url 'turnitin_tca_manager' %}">Turnitin Core API</a></li>
+    <li>Webhooks</li>
+{% endblock %}
+
+{% block body %}
+    <div class="box">
+        <div class="title-area">
+            <h2>Registered webhooks</h2>
+            {% if webhooks %}
+                <form method="POST" id="del-all"
+                      action="{% url 'turnitin_tca_delete_all_webhooks' %}">
+                    {% csrf_token %}
+                    <button class="button alert" type="submit"
+                            name="{{ confirmable_button_name }}">
+                        <i class="fa fa-trash">&nbsp;</i>Delete all
+                    </button>
+                </form>
+            {% endif %}
+        </div>
+        <div class="content">
+            <p>Turnitin allows up to 10 webhooks per integration scope. Delete any
+                stale entries (for example old development tunnel URLs) here.</p>
+            <table class="scroll small">
+                <thead>
+                    <tr>
+                        <th>URL</th>
+                        <th>Events</th>
+                        <th>Created</th>
+                        <th></th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for hook in webhooks %}
+                        <tr>
+                            <td>{{ hook.url }}</td>
+                            <td>{{ hook.event_types|join:", " }}</td>
+                            <td>{{ hook.created_time }}</td>
+                            <td>
+                                {% if hook.id == registered_id %}
+                                    <span class="label success">In use</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <form method="POST" id="del-{{ hook.id }}"
+                                      action="{% url 'turnitin_tca_delete_webhook' hook.id %}">
+                                    {% csrf_token %}
+                                    <button class="button tiny alert" type="submit"
+                                            name="{{ confirmable_button_name }}">
+                                        <i class="fa fa-trash">&nbsp;</i>Delete
+                                    </button>
+                                </form>
+                            </td>
+                        </tr>
+                    {% empty %}
+                        <tr><td colspan="5">No webhooks are registered.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    {% if confirm_modal %}
+        {% include "admin/elements/confirm_modal.html" with modal=confirm_modal form_id=confirm_form_id %}
+    {% endif %}
+{% endblock body %}
+
+{% block js %}
+    {% if confirm_modal %}
+        {% include "admin/elements/open_modal.html" with target=confirm_modal.id %}
+    {% endif %}
+{% endblock js %}

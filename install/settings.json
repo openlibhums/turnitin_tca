@@ -1,0 +1,122 @@
+[
+  {
+    "group": {
+      "name": "plugin:turnitin_tca"
+    },
+    "setting": {
+      "description": "Determines if the Turnitin Core API plugin is active for the journal.",
+      "is_translatable": false,
+      "name": "turnitin_enabled",
+      "pretty_name": "Turnitin Core API",
+      "type": "boolean"
+    },
+    "value": {
+      "default": false
+    }
+  },
+  {
+    "group": {
+      "name": "plugin:turnitin_tca"
+    },
+    "setting": {
+      "description": "The base URL of your Turnitin Core API tenant, e.g. https://your-tenant.turnitin.com",
+      "is_translatable": false,
+      "name": "turnitin_api_url",
+      "pretty_name": "API URL",
+      "type": "char"
+    },
+    "value": {
+      "default": ""
+    }
+  },
+  {
+    "group": {
+      "name": "plugin:turnitin_tca"
+    },
+    "setting": {
+      "description": "The API key registered for this integration in the Turnitin admin console.",
+      "is_translatable": false,
+      "name": "turnitin_api_key",
+      "pretty_name": "API Key",
+      "type": "text"
+    },
+    "value": {
+      "default": ""
+    }
+  },
+  {
+    "group": {
+      "name": "plugin:turnitin_tca"
+    },
+    "setting": {
+      "description": "When on, users are presented with the Turnitin EULA and must accept it before a file is sent. When off, EULA attributes are omitted and Turnitin handles any click-through at report-view time.",
+      "is_translatable": false,
+      "name": "turnitin_eula_acceptance",
+      "pretty_name": "EULA Acceptance",
+      "type": "boolean"
+    },
+    "value": {
+      "default": false
+    }
+  },
+  {
+    "group": {
+      "name": "plugin:turnitin_tca"
+    },
+    "setting": {
+      "description": "When on, submissions are added to the Turnitin index (add_to_index) and may be compared against future submissions.",
+      "is_translatable": false,
+      "name": "turnitin_index_submissions",
+      "pretty_name": "Index Submissions",
+      "type": "boolean"
+    },
+    "value": {
+      "default": false
+    }
+  },
+  {
+    "group": {
+      "name": "plugin:turnitin_tca"
+    },
+    "setting": {
+      "description": "Base64 signing secret used to verify the signature of incoming Turnitin webhooks. Generated automatically when the webhook is registered.",
+      "is_translatable": false,
+      "name": "turnitin_webhook_secret",
+      "pretty_name": "Webhook Secret",
+      "type": "text"
+    },
+    "value": {
+      "default": ""
+    }
+  },
+  {
+    "group": {
+      "name": "plugin:turnitin_tca"
+    },
+    "setting": {
+      "description": "The ID of the webhook registered with Turnitin. Set automatically when the webhook is registered.",
+      "is_translatable": false,
+      "name": "turnitin_webhook_id",
+      "pretty_name": "Webhook ID",
+      "type": "text"
+    },
+    "value": {
+      "default": ""
+    }
+  },
+  {
+    "group": {
+      "name": "plugin:turnitin_tca"
+    },
+    "setting": {
+      "description": "Optional override for the callback URL registered with Turnitin. Leave blank to use this journal's own webhook URL. Set this to a tunnel URL (e.g. https://abc123.ngrok-free.app/<journal>/plugins/turnitin-core-api/webhook/) to receive callbacks during development.",
+      "is_translatable": false,
+      "name": "turnitin_webhook_url",
+      "pretty_name": "Webhook URL Override",
+      "type": "text"
+    },
+    "value": {
+      "default": ""
+    }
+  }
+]

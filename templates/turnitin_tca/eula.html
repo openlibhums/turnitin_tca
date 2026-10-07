@@ -1,0 +1,38 @@
+{% extends "admin/core/base.html" %}
+
+{% block page_title %}Turnitin EULA{% endblock page_title %}
+{% block title %}Turnitin End User Licence Agreement{% endblock %}
+{% block title-section %}Turnitin EULA{% endblock %}
+
+{% block breadcrumbs %}
+    {{ block.super }}
+    <li><a href="{% url 'turnitin_tca_article' article.pk %}">Turnitin Similarity</a></li>
+    <li>EULA</li>
+{% endblock %}
+
+{% block body %}
+    <div class="box">
+        <div class="title-area">
+            <h2>End User Licence Agreement (version {{ version }})</h2>
+        </div>
+        <div class="content">
+            {% if eula_html %}
+                <div class="callout" style="max-height: 24rem; overflow-y: auto;">
+                    {{ eula_html }}
+                </div>
+            {% elif eula_url %}
+                <p>Please read the agreement:
+                    <a href="{{ eula_url }}" target="_blank" rel="noopener">{{ eula_url }}</a>.</p>
+            {% endif %}
+            <form method="POST">
+                {% csrf_token %}
+                <p>By continuing you accept the Turnitin EULA on behalf of your
+                    account for this submission.</p>
+                <button class="button success" type="submit">
+                    <i class="fa fa-check">&nbsp;</i>Accept and continue
+                </button>
+                <a class="button secondary" href="{% url 'turnitin_tca_article' article.pk %}">Cancel</a>
+            </form>
+        </div>
+    </div>
+{% endblock body %}

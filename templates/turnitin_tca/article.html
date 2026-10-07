@@ -1,0 +1,155 @@
+{% extends "admin/core/base.html" %}
+{% load static %}
+
+{% block page_title %}Turnitin Similarity{% endblock page_title %}
+{% block title %}Turnitin Similarity{% endblock %}
+{% block title-section %}Turnitin Similarity{% endblock %}
+{% block title-sub %}{{ article.title|safe }}{% endblock %}
+
+{% block breadcrumbs %}
+    {{ block.super }}
+    <li><a href="{% url 'review_unassigned_article' article.pk %}">{{ article.title|safe|truncatechars:40 }}</a></li>
+    <li>Turnitin Similarity</li>
+{% endblock %}
+
+{% block body %}
+    {% if not enabled %}
+        <div class="box">
+            <div class="content">
+                <div class="callout warning">
+                    Turnitin Core API is not configured for this journal. An editor
+                    can set it up under
+                    <a href="{% url 'turnitin_tca_manager' %}">Turnitin Core API settings</a>.
+                </div>
+            </div>
+        </div>
+    {% endif %}
+    <div class="box">
+        <div class="title-area">
+            <h2>Files</h2>
+        </div>
+        <div class="content">
+            <p>Send a file to Turnitin for a similarity report, or open a report that
+                has already been generated. Reports take a few minutes; you will be
+                emailed when one is ready.</p>
+            {% if enabled and failed_rows %}
+                <form method="POST" id="resend-failed"
+                      action="{% url 'turnitin_tca_resend_failed' article.pk %}">
+                    {% csrf_token %}
+                    <button class="button small warning" type="submit"
+                            name="{{ resend_confirmable_button_name }}">
+                        <i class="fa fa-repeat">&nbsp;</i>Resend all failed ({{ failed_rows|length }})
+                    </button>
+                </form>
+            {% endif %}
+            <table class="scroll small">
+                <thead>
+                    <tr>
+                        <th>Label</th>
+                        <th>Filename</th>
+                        <th>Type</th>
+                        <th>Uploaded</th>
+                        <th>Last modified</th>
+                        <th>Status</th>
+                        <th>Similarity</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in rows %}
+                        <tr>
+                            <td>{{ row.file.label|default:"—" }}</td>
+                            <td>{{ row.file.original_filename }}</td>
+                            <td>{{ row.kind }}</td>
+                            <td>{{ row.file.date_uploaded|date:"Y-m-d H:i"|default:"—" }}</td>
+                            <td>{{ row.file.last_modified|date:"Y-m-d H:i"|default:"—" }}</td>
+                            <td>
+                                {% if row.submission %}
+                                    {% if row.submission.report_status == 'COMPLETE' %}
+                                        <span class="label success">Report ready</span>
+                                    {% elif row.submission.status == 'ERROR' or row.submission.report_status == 'ERROR' %}
+                                        <span class="label alert">Error</span>
+                                        {% if row.submission.error_message %}
+                                            <p><small>{{ row.submission.error_message|truncatechars:200 }}</small></p>
+                                        {% endif %}
+                                    {% elif row.submission.status == 'RETRYING' %}
+                                        <span class="label warning">Retrying</span>
+                                        <p><small>Next attempt {{ row.submission.next_attempt_at|date:"Y-m-d H:i" }}</small></p>
+                                    {% else %}
+                                        <span class="label secondary">Processing</span>
+                                    {% endif %}
+                                {% else %}
+                                    <span class="label">Not sent</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if row.submission.similarity_score != None %}
+                                    {{ row.submission.similarity_score }}%
+                                {% else %}—{% endif %}
+                            </td>
+                            <td>
+                                {% if row.submission.can_view_report %}
+                                    <a class="button tiny success"
+                                       href="{% url 'turnitin_tca_view_report' article.pk row.submission.pk %}">
+                                        <i class="fa fa-external-link">&nbsp;</i>View Report
+                                    </a>
+                                    {% if enabled %}
+                                        <form method="POST" id="regen-{{ row.submission.pk }}"
+                                              action="{% url 'turnitin_tca_regenerate_report' article.pk row.submission.pk %}">
+                                            {% csrf_token %}
+                                            <button class="button tiny hollow" type="submit"
+                                                    name="{{ confirmable_button_name }}">
+                                                <i class="fa fa-refresh">&nbsp;</i>Request new report
+                                            </button>
+                                        </form>
+                                    {% endif %}
+                                {% elif row.submission.status == 'ERROR' and enabled %}
+                                    <form method="POST"
+                                          action="{% url 'turnitin_tca_send_file' article.pk row.file.pk %}">
+                                        {% csrf_token %}
+                                        <button class="button tiny warning" type="submit">
+                                            <i class="fa fa-repeat">&nbsp;</i>Resend
+                                        </button>
+                                    </form>
+                                {% elif row.submission.report_status == 'ERROR' and row.submission.status == 'COMPLETE' and enabled %}
+                                    <form method="POST"
+                                          action="{% url 'turnitin_tca_regenerate_report' article.pk row.submission.pk %}">
+                                        {% csrf_token %}
+                                        <button class="button tiny warning" type="submit"
+                                                name="{{ confirmed_button_name }}">
+                                            <i class="fa fa-refresh">&nbsp;</i>Request report again
+                                        </button>
+                                    </form>
+                                {% elif row.submission.status == 'RETRYING' %}
+                                    <button class="button tiny secondary" disabled>Send queued</button>
+                                {% elif row.submission %}
+                                    <button class="button tiny secondary" disabled>Awaiting report</button>
+                                {% elif enabled %}
+                                    <form method="POST"
+                                          action="{% url 'turnitin_tca_send_file' article.pk row.file.pk %}">
+                                        {% csrf_token %}
+                                        <button class="button tiny" type="submit">
+                                            <i class="fa fa-paper-plane">&nbsp;</i>Send for report
+                                        </button>
+                                    </form>
+                                {% endif %}
+                            </td>
+                        </tr>
+                    {% empty %}
+                        <tr><td colspan="8">No files are available for this article.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    {% if confirm_modal %}
+        {% include "admin/elements/confirm_modal.html" with modal=confirm_modal form_id=confirm_form_id %}
+    {% endif %}
+{% endblock body %}
+
+{% block js %}
+    {% if confirm_modal %}
+        {% include "admin/elements/open_modal.html" with target=confirm_modal.id %}
+    {% endif %}
+{% endblock js %}
