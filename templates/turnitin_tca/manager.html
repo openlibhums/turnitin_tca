@@ -52,7 +52,19 @@
                     </div>
                     <div class="callout">
                         <h3>Connection</h3>
-                        <p>Verify your API URL and key against Turnitin.</p>
+                        <p>Verify your API URL and key against Turnitin. This is
+                            checked automatically whenever the settings are saved.</p>
+                        <p>
+                            <strong>EULA:</strong>
+                            {% if require_eula == "true" %}
+                                required by your Turnitin licence. Editors accept it
+                                before their first send.
+                            {% elif require_eula == "false" %}
+                                not required by your Turnitin licence.
+                            {% else %}
+                                not yet checked. Test the connection to find out.
+                            {% endif %}
+                        </p>
                         <a class="button secondary"
                            href="{% url 'turnitin_tca_test_connection' %}">
                             <i class="fa fa-plug">&nbsp;</i>Test Connection

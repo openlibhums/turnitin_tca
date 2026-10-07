@@ -30,10 +30,16 @@ SETTING_NAMES = [
     "turnitin_enabled",
     "turnitin_api_url",
     "turnitin_api_key",
-    "turnitin_eula_acceptance",
     "turnitin_index_submissions",
+    "turnitin_save_report_changes",
     "turnitin_webhook_url",
 ]
+
+# Whether the tenant requires EULA acceptance is not an editor choice: it is
+# read from Turnitin's Get Features Enabled response (tenant.require_eula)
+# whenever the API URL and key are saved, and stored here as "true"/"false"
+# ("" until it has been fetched).
+REQUIRE_EULA_SETTING = "turnitin_require_eula"
 
 # The default repositories a similarity report is generated against.
 DEFAULT_SEARCH_REPOSITORIES = [

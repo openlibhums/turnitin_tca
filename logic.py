@@ -3,6 +3,7 @@ import binascii
 import hashlib
 import hmac
 import secrets
+import uuid
 from collections import OrderedDict
 from datetime import timedelta
 
@@ -69,6 +70,47 @@ def get_client(journal, interactive=False, timeout=None, max_retries=None):
         timeout=timeout,
         max_retries=max_retries,
     )
+
+
+def editor_error(request, message, exc=None):
+    """Show an editor a user-friendly error, keeping Turnitin's detail for admins.
+
+    The API's own error text is not meant for editorial staff, so it is logged
+    and only appended to the message for staff users (Janeway admins), who can
+    use it to raise a support ticket.
+    """
+    if exc is not None:
+        logger.error("%s %s", message, exc)
+        if request.user.is_staff:
+            message = "{} (Turnitin said: {})".format(message, exc)
+    messages.add_message(request, messages.ERROR, message)
+
+
+def tenant_requires_eula(features):
+    """Read tenant.require_eula from a Get Features Enabled response."""
+    return bool((features.get("tenant") or {}).get("require_eula"))
+
+
+def refresh_features(journal):
+    """Call Get Features Enabled and store whether the tenant requires the EULA.
+
+    Customers who bought iThenticate directly from Turnitin must be shown the
+    EULA in the submission workflow; those who bought it through Crossref must
+    not. Turnitin decides which, so the answer is stored rather than being an
+    editor setting. On failure the stored value is cleared, so it is fetched
+    again before the next send, and the error is raised.
+    """
+    try:
+        features = get_client(journal, interactive=True).features_enabled()
+    except TurnitinError:
+        save_setting(plugin_settings.REQUIRE_EULA_SETTING, "", journal)
+        raise
+    save_setting(
+        plugin_settings.REQUIRE_EULA_SETTING,
+        "true" if tenant_requires_eula(features) else "false",
+        journal,
+    )
+    return features
 
 
 def account_external_id(account):
@@ -157,32 +199,51 @@ def article_page_context(article, journal):
     }
 
 
+def owner_metadata(article):
+    """The Create Submission owner id and metadata for ``article``.
+
+    The owner is the article's correspondence author (the person whose work
+    it is). Janeway requires one, but the field is nullable (e.g. if the
+    author's account is deleted), so as a safeguard Turnitin's guidance is
+    followed: a random UUID with the name "Anonymous Author", never the
+    editor sending the file.
+    """
+    owner = article.correspondence_author
+    if not owner:
+        owner_id = str(uuid.uuid4())
+        return owner_id, {
+            "id": owner_id,
+            "given_name": "Anonymous",
+            "family_name": "Author",
+        }
+    owner_id = account_external_id(owner)
+    return owner_id, {
+        "id": owner_id,
+        "given_name": owner.first_name or "Unknown",
+        "family_name": owner.last_name or "Unknown",
+        "email": owner.email,
+    }
+
+
 def build_submission_payload(article, file_obj, submitter, eula_block=None):
     """The Create Submission body for sending ``file_obj`` as ``submitter``.
 
-    The owner is the article's correspondence author (the person whose work
-    it is), falling back to the submitter; the submitter is the editor who
-    sent the file. The article and journal are sent as group and group
-    context so Turnitin can organise submissions the way Janeway does.
+    The submitter is the editor who sent the file. The article and journal
+    are sent as group and group context so Turnitin can organise submissions
+    the way Janeway does.
     """
     journal = article.journal
-    owner = article.correspondence_author or submitter
+    owner_id, owner = owner_metadata(article)
 
     payload = {
-        "owner": account_external_id(owner),
+        "owner": owner_id,
         "title": (file_obj.label or file_obj.original_filename or "Submission")[:500],
         "submitter": account_external_id(submitter),
-        "owner_default_permission_set": "INSTRUCTOR",
-        "submitter_default_permission_set": "INSTRUCTOR",
+        # INSTRUCTOR is reserved for Turnitin's LMS integrations.
+        "owner_default_permission_set": "UNDEFINED",
+        "submitter_default_permission_set": "EDITOR",
         "metadata": {
-            "owners": [
-                {
-                    "id": account_external_id(owner),
-                    "given_name": owner.first_name or "Unknown",
-                    "family_name": owner.last_name or "Unknown",
-                    "email": owner.email,
-                }
-            ],
+            "owners": [owner],
             "submitter": {
                 "id": account_external_id(submitter),
                 "given_name": submitter.first_name or "Editor",
@@ -335,7 +396,7 @@ def retry_send(submission):
     if not submission.file or not submission.requested_by:
         mark_send_failed(
             submission,
-            "The file or the editor who sent it no longer exists.",
+            models.MISSING_FILE_MESSAGE,
         )
         return submission
 
@@ -358,11 +419,7 @@ def retry_send(submission):
             schedule_retry(submission, exc)
         elif exc.eula_required:
             logger.error("Turnitin send %s needs EULA acceptance", submission.pk)
-            mark_send_failed(
-                submission,
-                "The sending editor must accept the Turnitin EULA; resend the "
-                "file from the article page.",
-            )
+            mark_send_failed(submission, models.EULA_RESEND_MESSAGE)
         else:
             logger.error("Turnitin send retry failed for %s: %s", submission.pk, exc)
             mark_send_failed(submission, str(exc))
@@ -434,10 +491,10 @@ def send_file_from_request(request, article, file_obj, eula_block=None):
                 "Agreement before this file can be sent.",
             )
             return reverse("turnitin_tca_eula", args=[article.pk])
-        messages.add_message(
+        editor_error(
             request,
-            messages.ERROR,
-            "Send failed: {}".format(exc),
+            "The file could not be sent to Turnitin. Please try again later.",
+            exc,
         )
         return article_url
 
@@ -540,7 +597,7 @@ def poll_report(submission, client):
     return submission
 
 
-def apply_report_result(submission, status, score):
+def apply_report_result(submission, status, score, updated_report=False):
     """Persist a similarity-report result idempotently and without regression.
 
     Both the webhook and the polling fallback can observe a report, and either
@@ -548,20 +605,23 @@ def apply_report_result(submission, status, score):
     report). A conditional update means whichever process sees COMPLETE first
     wins and a later, older observation cannot overwrite it. The completion
     email is sent at most once, via notify_report_complete's atomic claim.
+
+    ``updated_report`` is set for SIMILARITY_UPDATED, which Turnitin sends
+    when an editor's saved viewer changes alter the score of a report that is
+    already complete, so it overwrites the stored score.
     """
+    # Turnitin reports an overall_match_percentage of 0 while a report is
+    # still processing, which is not a real score.
+    if status != "COMPLETE":
+        score = None
     fields = {"report_status": status}
     if score is not None:
         fields["similarity_score"] = score
 
-    updated = (
-        models.TurnitinSubmission.objects.filter(
-            pk=submission.pk,
-        )
-        .exclude(
-            report_status="COMPLETE",
-        )
-        .update(**fields)
-    )
+    rows = models.TurnitinSubmission.objects.filter(pk=submission.pk)
+    if not updated_report:
+        rows = rows.exclude(report_status="COMPLETE")
+    updated = rows.update(**fields)
 
     if updated:
         submission.report_status = status
@@ -579,20 +639,46 @@ def apply_report_result(submission, status, score):
 
 
 def get_viewer_url(submission, user):
-    """Return a launch URL for the similarity report viewer."""
+    """Return a launch URL for the similarity report viewer.
+
+    The optional eula attributes are never sent: the viewer presents the
+    latest EULA itself when the tenant requires it. save_changes keeps an
+    editor's changes in the viewer and makes Turnitin send SIMILARITY_UPDATED
+    when they change the overall score.
+    """
     journal = submission.article.journal
     client = get_client(journal, interactive=True)
     payload = {
         "viewer_user_id": account_external_id(user),
         "locale": "en-US",
-        "viewer_default_permission_set": "INSTRUCTOR",
+        "viewer_default_permission_set": "EDITOR",
+        "similarity": {
+            "view_settings": {
+                "save_changes": bool(
+                    get_setting("turnitin_save_report_changes", journal),
+                ),
+            },
+        },
     }
     response = client.viewer_url(submission.tii_submission_id, payload)
     return response.get("viewer_url")
 
 
 def eula_required(journal):
-    return bool(get_setting("turnitin_eula_acceptance", journal))
+    """Whether the tenant requires the EULA in the submission workflow.
+
+    Uses the stored tenant.require_eula, fetching it first if it is not yet
+    known. If Turnitin cannot be reached the send goes ahead; a tenant that
+    does require the EULA answers 451, which sends the editor to the EULA.
+    """
+    value = get_setting(plugin_settings.REQUIRE_EULA_SETTING, journal)
+    if value:
+        return value == "true"
+    try:
+        return tenant_requires_eula(refresh_features(journal))
+    except TurnitinError as exc:
+        logger.warning("Could not check whether Turnitin requires the EULA: %s", exc)
+        return False
 
 
 def get_latest_eula(journal):
@@ -797,6 +883,12 @@ def handle_webhook_event(event_type, payload, journal):
             submission,
             payload.get("status", "COMPLETE"),
             score,
+            updated_report=event_type == "SIMILARITY_UPDATED",
+        )
+        # apply_report_result saves with a queryset update, so record the
+        # webhook time separately.
+        models.TurnitinSubmission.objects.filter(pk=submission.pk).update(
+            last_webhook=submission.last_webhook,
         )
     else:
         submission.save()

@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import importlib
 import json
+import uuid
 from datetime import timedelta
 from unittest import mock
 
@@ -31,6 +32,8 @@ def configure_journal(journal, **overrides):
         "turnitin_api_url": "https://tenant.turnitin.com",
         "turnitin_api_key": "secret-key",
         "turnitin_webhook_secret": WEBHOOK_SECRET_B64,
+        # Known up front so tests do not make a Get Features Enabled call.
+        "turnitin_require_eula": "false",
     }
     values.update(overrides)
     for name, value in values.items():
@@ -250,6 +253,72 @@ class TurnitinLogicTest(TestCase):
         submission.refresh_from_db()
         self.assertEqual(submission.report_status, "COMPLETE")
         self.assertEqual(submission.similarity_score, 55)
+
+    def test_processing_report_does_not_store_a_score(self):
+        # Turnitin reports 0% while a report is still being generated.
+        submission = models.TurnitinSubmission.objects.create(
+            article=self.article,
+            file=self.file,
+            tii_submission_id="tii-processing",
+            status="COMPLETE",
+            report_requested=True,
+            report_status="PROCESSING",
+        )
+        logic.apply_report_result(submission, "PROCESSING", 0)
+        submission.refresh_from_db()
+        self.assertIsNone(submission.similarity_score)
+
+    def test_similarity_webhook_records_last_webhook(self):
+        submission = models.TurnitinSubmission.objects.create(
+            article=self.article,
+            file=self.file,
+            tii_submission_id="tii-last-webhook",
+            status="COMPLETE",
+            report_requested=True,
+            report_status="PROCESSING",
+            report_notified=True,
+        )
+        logic.handle_webhook_event(
+            "SIMILARITY_COMPLETE",
+            {
+                "id": "tii-last-webhook",
+                "status": "COMPLETE",
+                "overall_match_percentage": 9,
+            },
+            self.journal_one,
+        )
+        submission.refresh_from_db()
+        self.assertIsNotNone(submission.last_webhook)
+
+    def test_similarity_updated_overwrites_completed_score(self):
+        # Saved viewer changes alter a report that is already complete.
+        submission = models.TurnitinSubmission.objects.create(
+            article=self.article,
+            file=self.file,
+            tii_submission_id="tii-updated",
+            status="COMPLETE",
+            report_requested=True,
+            report_status="COMPLETE",
+            similarity_score=55,
+            report_notified=True,
+            requested_by=self.editor,
+        )
+        with mock.patch.object(
+            logic.notify_helpers,
+            "send_email_with_body_from_user",
+        ) as send_mail:
+            logic.handle_webhook_event(
+                "SIMILARITY_UPDATED",
+                {
+                    "id": "tii-updated",
+                    "status": "COMPLETE",
+                    "overall_match_percentage": 12,
+                },
+                self.journal_one,
+            )
+        submission.refresh_from_db()
+        self.assertEqual(submission.similarity_score, 12)
+        send_mail.assert_not_called()
 
 
 @override_settings(URL_CONFIG="domain")
@@ -607,8 +676,8 @@ class TurnitinViewTest(TestCase):
         self.assertEqual(response.status_code, 302)
         fake_client.generate_similarity_report.assert_not_called()
 
-    def test_send_file_requires_eula_when_enabled(self):
-        configure_journal(self.journal_one, turnitin_eula_acceptance=True)
+    def test_send_file_requires_eula_when_tenant_requires_it(self):
+        configure_journal(self.journal_one, turnitin_require_eula="true")
         self.client.force_login(self.editor)
         with mock.patch.object(
             logic,
@@ -629,7 +698,50 @@ class TurnitinViewTest(TestCase):
             fetch_redirect_response=False,
         )
         # Reset so other tests see EULA off again.
-        configure_journal(self.journal_one, turnitin_eula_acceptance=False)
+        configure_journal(self.journal_one, turnitin_require_eula="false")
+
+    def test_saving_settings_checks_features_and_stores_require_eula(self):
+        configure_journal(self.journal_one, turnitin_require_eula="")
+        self.client.force_login(self.editor)
+        fake_client = mock.Mock()
+        fake_client.features_enabled.return_value = {
+            "product_name": "iThenticate",
+            "tenant": {"require_eula": True},
+        }
+        with mock.patch.object(logic, "get_client", return_value=fake_client):
+            self.client.post(
+                reverse("turnitin_tca_manager"),
+                data={
+                    "turnitin_enabled": "on",
+                    "turnitin_api_url": "https://tenant.turnitin.com",
+                    "turnitin_api_key": "secret-key",
+                },
+                SERVER_NAME=self.journal_one.domain,
+            )
+        fake_client.features_enabled.assert_called_once()
+        self.assertEqual(
+            logic.get_setting("turnitin_require_eula", self.journal_one),
+            "true",
+        )
+        configure_journal(self.journal_one, turnitin_require_eula="false")
+
+    def test_failed_connection_check_shows_friendly_message(self):
+        self.client.force_login(self.editor)
+        fake_client = mock.Mock()
+        fake_client.features_enabled.side_effect = client.TurnitinError(
+            "TCA GET features-enabled returned 401",
+            status_code=401,
+            body="raw api detail",
+        )
+        with mock.patch.object(logic, "get_client", return_value=fake_client):
+            response = self.client.get(
+                reverse("turnitin_tca_test_connection"),
+                SERVER_NAME=self.journal_one.domain,
+                follow=True,
+            )
+        self.assertContains(response, "Could not connect to Turnitin")
+        self.assertNotContains(response, "raw api detail")
+        configure_journal(self.journal_one, turnitin_require_eula="false")
 
 
 class TurnitinCronInstallTest(SimpleTestCase):
@@ -708,8 +820,38 @@ class TurnitinSendFlowTest(TestCase):
         fake_client.create_submission.assert_called_once()
         fake_client.upload_file.assert_called_once()
         payload = fake_client.create_submission.call_args[0][0]
-        self.assertEqual(payload["owner_default_permission_set"], "INSTRUCTOR")
+        self.assertEqual(payload["owner_default_permission_set"], "UNDEFINED")
+        self.assertEqual(payload["submitter_default_permission_set"], "EDITOR")
         self.assertIn("metadata", payload)
+
+    def test_payload_without_correspondence_author_is_anonymous(self):
+        self.article.correspondence_author = None
+        payload = logic.build_submission_payload(
+            self.article,
+            self.file,
+            self.editor,
+        )
+        owner_id = payload["owner"]
+        self.assertNotEqual(owner_id, logic.account_external_id(self.editor))
+        self.assertEqual(
+            payload["metadata"]["owners"],
+            [{"id": owner_id, "given_name": "Anonymous", "family_name": "Author"}],
+        )
+        self.assertEqual(str(uuid.UUID(owner_id)), owner_id)
+
+    def test_payload_owner_is_correspondence_author(self):
+        author = helpers.create_author(self.journal_one)
+        self.article.correspondence_author = author
+        payload = logic.build_submission_payload(
+            self.article,
+            self.file,
+            self.editor,
+        )
+        self.assertEqual(payload["owner"], logic.account_external_id(author))
+        self.assertEqual(
+            payload["metadata"]["owners"][0]["email"],
+            author.email,
+        )
 
     def test_send_file_records_error_on_failure(self):
         fake_client = mock.Mock()
@@ -740,6 +882,60 @@ class TurnitinSendFlowTest(TestCase):
         with mock.patch.object(logic, "get_client", return_value=fake_client):
             url = logic.get_viewer_url(submission, self.editor)
         self.assertEqual(url, "https://viewer")
+        payload = fake_client.viewer_url.call_args[0][1]
+        self.assertEqual(payload["viewer_default_permission_set"], "EDITOR")
+        # On by default, so SIMILARITY_UPDATED keeps the score current.
+        self.assertTrue(payload["similarity"]["view_settings"]["save_changes"])
+        self.assertNotIn("eula", payload)
+
+    def test_get_viewer_url_sends_save_changes_setting(self):
+        configure_journal(self.journal_one, turnitin_save_report_changes=False)
+        submission = models.TurnitinSubmission.objects.create(
+            article=self.article,
+            file=self.file,
+            tii_submission_id="tii-save",
+            report_status="COMPLETE",
+        )
+        fake_client = mock.Mock()
+        fake_client.viewer_url.return_value = {"viewer_url": "https://viewer"}
+        with mock.patch.object(logic, "get_client", return_value=fake_client):
+            logic.get_viewer_url(submission, self.editor)
+        payload = fake_client.viewer_url.call_args[0][1]
+        self.assertFalse(payload["similarity"]["view_settings"]["save_changes"])
+        configure_journal(self.journal_one, turnitin_save_report_changes=True)
+
+    def test_eula_required_follows_stored_tenant_value(self):
+        configure_journal(self.journal_one, turnitin_require_eula="true")
+        self.assertTrue(logic.eula_required(self.journal_one))
+        configure_journal(self.journal_one, turnitin_require_eula="false")
+        self.assertFalse(logic.eula_required(self.journal_one))
+
+    def test_eula_required_fetches_features_when_unknown(self):
+        configure_journal(self.journal_one, turnitin_require_eula="")
+        fake_client = mock.Mock()
+        fake_client.features_enabled.return_value = {
+            "tenant": {"require_eula": True},
+        }
+        with mock.patch.object(logic, "get_client", return_value=fake_client):
+            self.assertTrue(logic.eula_required(self.journal_one))
+        self.assertEqual(
+            logic.get_setting("turnitin_require_eula", self.journal_one),
+            "true",
+        )
+        configure_journal(self.journal_one, turnitin_require_eula="false")
+
+    def test_eula_required_falls_back_when_features_unavailable(self):
+        # The send goes ahead; a tenant that needs the EULA answers 451.
+        configure_journal(self.journal_one, turnitin_require_eula="")
+        fake_client = mock.Mock()
+        fake_client.features_enabled.side_effect = outage()
+        with mock.patch.object(logic, "get_client", return_value=fake_client):
+            self.assertFalse(logic.eula_required(self.journal_one))
+        self.assertEqual(
+            logic.get_setting("turnitin_require_eula", self.journal_one),
+            "",
+        )
+        configure_journal(self.journal_one, turnitin_require_eula="false")
 
     def test_build_eula_block_records_acceptance(self):
         block = logic.build_eula_block(self.editor, "v9")
@@ -1186,7 +1382,7 @@ class TurnitinResendViewTest(TestCase):
             article=cls.failed_article,
             file=cls.failed_file,
             status="ERROR",
-            error_message="Unsupported file type",
+            error_message="UNSUPPORTED_FILETYPE",
             requested_by=cls.editor,
         )
         models.TurnitinSubmission.objects.create(
@@ -1260,7 +1456,8 @@ class TurnitinResendViewTest(TestCase):
             SERVER_NAME=self.journal_one.domain,
         )
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Unsupported file type")
+        self.assertContains(response, "Turnitin cannot check this type of file.")
+        self.assertNotContains(response, "Turnitin said:")
         self.assertContains(
             response,
             reverse(
@@ -1341,3 +1538,45 @@ class TurnitinResendViewTest(TestCase):
             self.client.session["turnitin_pending_report"],
             self.complete.pk,
         )
+
+    def test_article_page_shows_raw_error_to_staff(self):
+        staff = helpers.create_editor(
+            self.journal_one,
+            email="staff-editor@example.com",
+            is_staff=True,
+        )
+        self.client.force_login(staff)
+        response = self.client.get(
+            reverse(
+                "turnitin_tca_article",
+                kwargs={"article_id": self.failed_article.pk},
+            ),
+            SERVER_NAME=self.journal_one.domain,
+        )
+        self.assertContains(response, "Turnitin said: UNSUPPORTED_FILETYPE")
+
+    def test_view_report_failure_shows_friendly_message(self):
+        self.client.force_login(self.editor)
+        fake_client = mock.Mock()
+        fake_client.viewer_url.side_effect = client.TurnitinError(
+            "TCA POST viewer-url returned 500",
+            status_code=500,
+            body="raw api detail",
+        )
+        with mock.patch.object(logic, "get_client", return_value=fake_client):
+            response = self.client.get(
+                reverse(
+                    "turnitin_tca_view_report",
+                    kwargs={
+                        "article_id": self.failed_article.pk,
+                        "submission_id": self.complete.pk,
+                    },
+                ),
+                SERVER_NAME=self.journal_one.domain,
+                follow=True,
+            )
+        self.assertContains(
+            response,
+            "Viewer not currently available, please try again later.",
+        )
+        self.assertNotContains(response, "raw api detail")

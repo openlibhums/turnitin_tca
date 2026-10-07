@@ -49,14 +49,14 @@
       "name": "plugin:turnitin_tca"
     },
     "setting": {
-      "description": "When on, users are presented with the Turnitin EULA and must accept it before a file is sent. When off, EULA attributes are omitted and Turnitin handles any click-through at report-view time.",
+      "description": "Whether the Turnitin tenant requires EULA acceptance, as reported by the Get Features Enabled request (tenant.require_eula): 'true' or 'false', or blank if it has not been fetched yet. Set automatically when the API URL and key are saved.",
       "is_translatable": false,
-      "name": "turnitin_eula_acceptance",
-      "pretty_name": "EULA Acceptance",
-      "type": "boolean"
+      "name": "turnitin_require_eula",
+      "pretty_name": "Require EULA",
+      "type": "char"
     },
     "value": {
-      "default": false
+      "default": ""
     }
   },
   {
@@ -72,6 +72,21 @@
     },
     "value": {
       "default": false
+    }
+  },
+  {
+    "group": {
+      "name": "plugin:turnitin_tca"
+    },
+    "setting": {
+      "description": "When on, changes an editor makes in the iThenticate report viewer are saved for the next time the report is opened (save_changes), and Turnitin sends a SIMILARITY_UPDATED webhook if the overall match percentage changes.",
+      "is_translatable": false,
+      "name": "turnitin_save_report_changes",
+      "pretty_name": "Save iThenticate report change",
+      "type": "boolean"
+    },
+    "value": {
+      "default": "on"
     }
   },
   {

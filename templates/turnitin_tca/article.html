@@ -69,8 +69,9 @@
                                         <span class="label success">Report ready</span>
                                     {% elif row.submission.status == 'ERROR' or row.submission.report_status == 'ERROR' %}
                                         <span class="label alert">Error</span>
-                                        {% if row.submission.error_message %}
-                                            <p><small>{{ row.submission.error_message|truncatechars:200 }}</small></p>
+                                        <p><small>{{ row.submission.editor_error }}</small></p>
+                                        {% if request.user.is_staff and row.submission.error_message %}
+                                            <p><small>Turnitin said: {{ row.submission.error_message|truncatechars:200 }}</small></p>
                                         {% endif %}
                                     {% elif row.submission.status == 'RETRYING' %}
                                         <span class="label warning">Retrying</span>

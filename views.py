@@ -46,6 +46,18 @@ def manager(request):
                 messages.SUCCESS,
                 "Turnitin settings updated.",
             )
+            # The first call with new credentials is Get Features Enabled,
+            # which also tells us whether the tenant requires the EULA.
+            if logic.is_enabled(request.journal):
+                check_connection(request)
+            else:
+                # The credentials may now belong to another tenant, so ask
+                # again once the integration is configured.
+                logic.save_setting(
+                    plugin_settings.REQUIRE_EULA_SETTING,
+                    "",
+                    request.journal,
+                )
             return redirect(reverse("turnitin_tca_manager"))
 
     webhook_url = logic.get_setting(
@@ -57,30 +69,42 @@ def manager(request):
         "admin_form": admin_form,
         "webhook_url": webhook_url,
         "webhook_id": logic.get_setting("turnitin_webhook_id", request.journal),
+        "require_eula": logic.get_setting(
+            plugin_settings.REQUIRE_EULA_SETTING,
+            request.journal,
+        ),
     }
     return render(request, template, context)
+
+
+def check_connection(request):
+    """Call Get Features Enabled and tell the editor how it went."""
+    try:
+        features = logic.refresh_features(request.journal)
+    except TurnitinError as exc:
+        logic.editor_error(
+            request,
+            "Could not connect to Turnitin. Check the API URL and key, or "
+            "try again later.",
+            exc,
+        )
+        return
+    product = features.get("product_name", "Turnitin")
+    if logic.tenant_requires_eula(features):
+        eula = "Editors will be asked to accept the Turnitin EULA before sending files."
+    else:
+        eula = "Your licence does not require editors to accept a EULA."
+    messages.add_message(
+        request,
+        messages.SUCCESS,
+        "Connection succeeded. Licensed product: {}. {}".format(product, eula),
+    )
 
 
 @has_journal
 @editor_user_required
 def test_connection(request):
-    try:
-        features = logic.get_client(
-            request.journal,
-            interactive=True,
-        ).features_enabled()
-        product = features.get("product_name", "Turnitin")
-        messages.add_message(
-            request,
-            messages.SUCCESS,
-            "Connection succeeded. Licensed product: {}.".format(product),
-        )
-    except TurnitinError as exc:
-        messages.add_message(
-            request,
-            messages.ERROR,
-            "Connection failed: {}".format(exc),
-        )
+    check_connection(request)
     return redirect(reverse("turnitin_tca_manager"))
 
 
@@ -105,10 +129,10 @@ def register_webhook(request):
             "generated automatically.".format(result.get("id", "")),
         )
     except TurnitinError as exc:
-        messages.add_message(
+        logic.editor_error(
             request,
-            messages.ERROR,
-            "Webhook registration failed: {}".format(exc),
+            "The webhook could not be registered. Please try again later.",
+            exc,
         )
     return redirect(reverse("turnitin_tca_manager"))
 
@@ -119,10 +143,10 @@ def render_webhooks(request, confirm_modal=None, confirm_form_id=None):
     try:
         hooks = logic.list_webhooks(request.journal)
     except TurnitinError as exc:
-        messages.add_message(
+        logic.editor_error(
             request,
-            messages.ERROR,
-            "Could not list webhooks: {}".format(exc),
+            "Could not load the registered webhooks. Please try again later.",
+            exc,
         )
     template = "turnitin_tca/webhooks.html"
     context = {
@@ -157,10 +181,10 @@ def delete_webhook(request, webhook_id):
         logic.delete_webhook(request.journal, webhook_id)
         messages.add_message(request, messages.SUCCESS, "Webhook deleted.")
     except TurnitinError as exc:
-        messages.add_message(
+        logic.editor_error(
             request,
-            messages.ERROR,
-            "Could not delete webhook: {}".format(exc),
+            "The webhook could not be deleted. Please try again later.",
+            exc,
         )
     return redirect(reverse("turnitin_tca_webhooks"))
 
@@ -185,10 +209,10 @@ def delete_all_webhooks(request):
             "Deleted {} webhook(s).".format(count),
         )
     except TurnitinError as exc:
-        messages.add_message(
+        logic.editor_error(
             request,
-            messages.ERROR,
-            "Could not delete webhooks: {}".format(exc),
+            "The webhooks could not be deleted. Please try again later.",
+            exc,
         )
     return redirect(reverse("turnitin_tca_webhooks"))
 
@@ -245,10 +269,10 @@ def send_file(request, article_id, file_id):
             request.user,
         )
     except TurnitinError as exc:
-        messages.add_message(
+        logic.editor_error(
             request,
-            messages.ERROR,
-            "Could not load EULA: {}".format(exc),
+            "The Turnitin EULA could not be loaded. Please try again later.",
+            exc,
         )
         return redirect(reverse("turnitin_tca_article", args=[article.pk]))
     if not accepted:
@@ -300,10 +324,10 @@ def resend_failed(request, article_id):
             request.user,
         )
     except TurnitinError as exc:
-        messages.add_message(
+        logic.editor_error(
             request,
-            messages.ERROR,
-            "Could not load EULA: {}".format(exc),
+            "The Turnitin EULA could not be loaded. Please try again later.",
+            exc,
         )
         return redirect(article_url)
     if not accepted:
@@ -333,7 +357,7 @@ def resend_failed(request, article_id):
                     "Agreement before files can be sent.",
                 )
                 return redirect(reverse("turnitin_tca_eula", args=[article.pk]))
-            failed.append("{}: {}".format(row["file"].original_filename, exc))
+            failed.append((row["file"].original_filename, exc))
             continue
         if submission.status == "RETRYING":
             retrying += 1
@@ -344,11 +368,13 @@ def resend_failed(request, article_id):
     if retrying:
         summary += " {} will be retried automatically.".format(retrying)
     messages.add_message(request, messages.SUCCESS, summary)
-    for failure in failed:
-        messages.add_message(
+    for filename, exc in failed:
+        logic.editor_error(
             request,
-            messages.ERROR,
-            "Send failed: {}".format(failure),
+            "{} could not be sent to Turnitin. Please try again later.".format(
+                filename,
+            ),
+            exc,
         )
     return redirect(article_url)
 
@@ -364,10 +390,10 @@ def eula(request, article_id):
     try:
         version_info = logic.get_latest_eula(request.journal)
     except TurnitinError as exc:
-        messages.add_message(
+        logic.editor_error(
             request,
-            messages.ERROR,
-            "Could not load EULA: {}".format(exc),
+            "The Turnitin EULA could not be loaded. Please try again later.",
+            exc,
         )
         return redirect(reverse("turnitin_tca_article", args=[article.pk]))
 
@@ -391,10 +417,11 @@ def eula(request, article_id):
             # in its eula block, so only a viewer launch depends on this call.
             logger.error("Could not record Turnitin EULA acceptance: %s", exc)
             if pending_report:
-                messages.add_message(
+                logic.editor_error(
                     request,
-                    messages.ERROR,
-                    "Could not record your acceptance with Turnitin: {}".format(exc),
+                    "Your acceptance could not be recorded with Turnitin. "
+                    "Please try again later.",
+                    exc,
                 )
                 return redirect(article_url)
 
@@ -450,15 +477,10 @@ def view_report(request, article_id, submission_id):
             return redirect(
                 reverse("turnitin_tca_eula", args=[submission.article_id]),
             )
-        logger.error(
-            "Turnitin viewer launch failed for submission %s: %s",
-            submission.pk,
-            exc,
-        )
-        messages.add_message(
+        logic.editor_error(
             request,
-            messages.ERROR,
-            "Could not open report: {}".format(exc),
+            "Viewer not currently available, please try again later.",
+            exc,
         )
         return redirect(
             reverse("turnitin_tca_article", args=[submission.article_id]),
@@ -516,10 +538,10 @@ def regenerate_report(request, article_id, submission_id):
             "A new similarity report was requested. It will appear here once ready.",
         )
     except TurnitinError as exc:
-        messages.add_message(
+        logic.editor_error(
             request,
-            messages.ERROR,
-            "Could not request a new report: {}".format(exc),
+            "A new report could not be requested. Please try again later.",
+            exc,
         )
     return redirect(article_url)
 

@@ -1,6 +1,28 @@
 from django.db import models
 from django.utils import timezone
 
+# Plain-language explanations of the error_code Turnitin reports when it
+# cannot process a submitted file.
+ERROR_CODE_MESSAGES = {
+    "UNSUPPORTED_FILETYPE": "Turnitin cannot check this type of file.",
+    "PROCESSING_ERROR": "Turnitin could not process this file.",
+    "CANNOT_EXTRACT_TEXT": "Turnitin could not read any text in this file.",
+    "TOO_LITTLE_TEXT": "This file does not contain enough text to check.",
+    "TOO_MUCH_TEXT": "This file contains more text than Turnitin can check.",
+    "TOO_MANY_PAGES": "This file has more pages than Turnitin can check.",
+    "FILE_LOCKED": "This file is locked or password protected, so Turnitin "
+    "cannot read it.",
+    "CORRUPT_FILE": "This file appears to be damaged and cannot be read.",
+}
+
+# Error messages Janeway writes itself, which are already safe to show editors.
+EULA_RESEND_MESSAGE = (
+    "The sending editor must accept the Turnitin EULA; resend the file from "
+    "the article page."
+)
+MISSING_FILE_MESSAGE = "The file or the editor who sent it no longer exists."
+PLAIN_ERROR_MESSAGES = (EULA_RESEND_MESSAGE, MISSING_FILE_MESSAGE)
+
 
 class TurnitinSubmission(models.Model):
     """A single core.File that has been sent to Turnitin Core API."""
@@ -96,6 +118,23 @@ class TurnitinSubmission(models.Model):
             self.tii_submission_id or "(pending)",
             self.file_id,
         )
+
+    @property
+    def editor_error(self):
+        """A user-friendly explanation of why this row failed.
+
+        error_message keeps the raw detail (often Turnitin's API response) for
+        Janeway admins to raise support tickets with; editors see this instead.
+        """
+        if self.error_message in ERROR_CODE_MESSAGES:
+            return ERROR_CODE_MESSAGES[self.error_message]
+        if self.error_message in PLAIN_ERROR_MESSAGES:
+            return self.error_message
+        if self.status != "ERROR" and self.report_status == "ERROR":
+            return (
+                "The similarity report could not be generated. Please try again later."
+            )
+        return "The file could not be sent to Turnitin. Please try again later."
 
     @property
     def is_complete(self):
