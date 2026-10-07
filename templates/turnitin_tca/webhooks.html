@@ -3,7 +3,7 @@
 {% block page_title %}Turnitin Webhooks{% endblock page_title %}
 {% block title %}Turnitin Webhooks{% endblock %}
 {% block title-section %}Turnitin Webhooks{% endblock %}
-{% block title-sub %}Webhooks registered with Turnitin for this journal{% endblock %}
+{% block title-sub %}Webhooks registered with Turnitin for this API key{% endblock %}
 
 {% block breadcrumbs %}
     {{ block.super }}
@@ -27,8 +27,9 @@
             {% endif %}
         </div>
         <div class="content">
-            <p>Turnitin allows up to 10 webhooks per integration scope. Delete any
-                stale entries (for example old development tunnel URLs) here.</p>
+            <p>Turnitin sends every event to every webhook registered for this
+                API key, so there should be only one: the one in use. Delete any
+                others, such as old development tunnel URLs.</p>
             <table class="scroll small">
                 <thead>
                     <tr>
@@ -48,6 +49,8 @@
                             <td>
                                 {% if hook.id == registered_id %}
                                     <span class="label success">In use</span>
+                                {% else %}
+                                    <span class="label warning">Not used by Janeway</span>
                                 {% endif %}
                             </td>
                             <td>

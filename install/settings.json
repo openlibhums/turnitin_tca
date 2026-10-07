@@ -67,7 +67,7 @@
       "description": "When on, submissions are added to the Turnitin index (add_to_index) and may be compared against future submissions.",
       "is_translatable": false,
       "name": "turnitin_index_submissions",
-      "pretty_name": "Index Submissions",
+      "pretty_name": "Add submissions to your iThenticate repository for future comparison",
       "type": "boolean"
     },
     "value": {
@@ -124,7 +124,7 @@
       "name": "plugin:turnitin_tca"
     },
     "setting": {
-      "description": "Optional override for the callback URL registered with Turnitin. Leave blank to use this journal's own webhook URL. Set this to a tunnel URL (e.g. https://abc123.ngrok-free.app/<journal>/plugins/turnitin-core-api/webhook/) to receive callbacks during development.",
+      "description": "Optional override for the callback URL registered with Turnitin. Leave blank to use this install's webhook URL. Set this to a tunnel URL (e.g. https://abc123.ngrok-free.app/plugins/turnitin-core-api/webhook/) to receive callbacks during development.",
       "is_translatable": false,
       "name": "turnitin_webhook_url",
       "pretty_name": "Webhook URL Override",

@@ -4,7 +4,7 @@
 {% block page_title %}Turnitin Core API{% endblock page_title %}
 {% block title %}Turnitin Core API{% endblock %}
 {% block title-section %}Turnitin Core API{% endblock %}
-{% block title-sub %}Configure the Turnitin Core API integration{% endblock %}
+{% block title-sub %}The Turnitin account used by every journal on this install{% endblock %}
 
 {% block breadcrumbs %}
     {{ block.super }}
@@ -30,9 +30,11 @@
                 <div class="large-5 columns">
                     <div class="callout">
                         <h3>Webhook</h3>
-                        <p>Register this callback URL with Turnitin so reports notify
-                            Janeway when they are ready. A Base64 signing secret is
-                            generated automatically and used to verify callbacks.</p>
+                        <p>Turnitin sends events for every journal to this one
+                            callback URL. It is registered automatically when the
+                            settings are saved, unless it already is. A Base64
+                            signing secret is generated and used to verify
+                            callbacks.</p>
                         <p><code>{{ webhook_url }}</code></p>
                         {% if webhook_id %}
                             <p class="label success">Registered (id {{ webhook_id }})</p>
@@ -52,8 +54,10 @@
                     </div>
                     <div class="callout">
                         <h3>Connection</h3>
-                        <p>Verify your API URL and key against Turnitin. This is
-                            checked automatically whenever the settings are saved.</p>
+                        <p>These settings apply to every journal. Each journal
+                            turns the integration on from its own Turnitin Core API
+                            page. The connection is checked automatically whenever
+                            the settings are saved.</p>
                         <p>
                             <strong>EULA:</strong>
                             {% if require_eula == "true" %}

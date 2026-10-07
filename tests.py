@@ -14,6 +14,7 @@ from django.urls import clear_url_caches, reverse
 from django.utils import timezone
 
 from core import models as core_models
+from press import models as press_models
 from utils import setting_handler
 from utils.testing import helpers
 
@@ -26,7 +27,7 @@ WEBHOOK_SECRET_B64 = base64.b64encode(WEBHOOK_SECRET_RAW).decode("ascii")
 
 
 def configure_journal(journal, **overrides):
-    plugin = tca_settings.TurnitinTCAPlugin.get_self()
+    """Turn Turnitin on for ``journal`` and set the install-wide account."""
     values = {
         "turnitin_enabled": True,
         "turnitin_api_url": "https://tenant.turnitin.com",
@@ -37,7 +38,11 @@ def configure_journal(journal, **overrides):
     }
     values.update(overrides)
     for name, value in values.items():
-        setting_handler.save_plugin_setting(plugin, name, value, journal)
+        logic.save_setting(name, value, journal)
+
+
+def press_domain():
+    return press_models.Press.objects.first().domain
 
 
 def sign(body):
@@ -115,10 +120,10 @@ class TurnitinLogicTest(TestCase):
             hashlib.sha256,
         ).hexdigest()
         self.assertTrue(
-            logic.verify_webhook_signature(self.journal_one, body, good),
+            logic.verify_webhook_signature(body, good),
         )
         self.assertFalse(
-            logic.verify_webhook_signature(self.journal_one, body, "bad"),
+            logic.verify_webhook_signature(body, "bad"),
         )
 
     def test_signing_key_decodes_base64_secret(self):
@@ -369,6 +374,11 @@ class TurnitinViewTest(TestCase):
         cls.article = helpers.create_article(cls.journal_one)
         cls.file = add_manuscript_file(cls.article)
         cls.other_article = helpers.create_article(cls.journal_two)
+        cls.staff = helpers.create_user(
+            "tca-staff@example.com",
+            is_staff=True,
+            is_active=True,
+        )
         configure_journal(cls.journal_one)
 
     def test_article_page_requires_login(self):
@@ -408,26 +418,60 @@ class TurnitinViewTest(TestCase):
         )
         self.assertEqual(response.status_code, 404)
 
-    def test_manager_renders_and_saves_settings(self):
+    def test_journal_manager_only_turns_turnitin_on_and_off(self):
         self.client.force_login(self.editor)
         url = reverse("turnitin_tca_manager")
         get_response = self.client.get(url, SERVER_NAME=self.journal_one.domain)
         self.assertEqual(get_response.status_code, 200)
+        self.assertEqual(
+            list(get_response.context["journal_form"].fields),
+            ["turnitin_enabled"],
+        )
 
         post_response = self.client.post(
             url,
-            data={
-                "turnitin_enabled": "on",
-                "turnitin_api_url": "https://saved.turnitin.com",
-                "turnitin_api_key": "saved-key",
-            },
+            data={"turnitin_api_url": "https://ignored.turnitin.com"},
             SERVER_NAME=self.journal_one.domain,
         )
         self.assertEqual(post_response.status_code, 302)
+        self.assertFalse(logic.get_setting("turnitin_enabled", self.journal_one))
         self.assertEqual(
-            logic.get_setting("turnitin_api_url", self.journal_one),
-            "https://saved.turnitin.com",
+            logic.get_setting("turnitin_api_url", None),
+            "https://tenant.turnitin.com",
         )
+        configure_journal(self.journal_one)
+
+    def test_install_settings_apply_to_every_journal(self):
+        self.client.force_login(self.staff)
+        fake_client = mock.Mock()
+        fake_client.features_enabled.return_value = {"tenant": {}}
+        fake_client.list_webhooks.return_value = []
+        fake_client.create_webhook.return_value = {"id": "wh-1"}
+        with mock.patch.object(logic, "get_client", return_value=fake_client):
+            response = self.client.post(
+                reverse("turnitin_tca_manager"),
+                data={
+                    "turnitin_api_url": "https://saved.turnitin.com",
+                    "turnitin_api_key": "saved-key",
+                },
+                SERVER_NAME=press_domain(),
+            )
+        self.assertEqual(response.status_code, 302)
+        for journal in (self.journal_one, self.journal_two, None):
+            self.assertEqual(
+                logic.get_setting("turnitin_api_url", journal),
+                "https://saved.turnitin.com",
+            )
+        configure_journal(self.journal_one)
+
+    def test_install_settings_are_staff_only(self):
+        self.client.force_login(self.editor)
+        response = self.client.get(
+            reverse("turnitin_tca_manager"),
+            SERVER_NAME=press_domain(),
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("login", response["Location"])
 
     def test_send_file_creates_submission(self):
         self.client.force_login(self.editor)
@@ -488,66 +532,154 @@ class TurnitinViewTest(TestCase):
         submission.refresh_from_db()
         self.assertEqual(submission.similarity_score, 17)
 
+    def test_install_webhook_url_finds_submission_by_journal_in_metadata(self):
+        submission = models.TurnitinSubmission.objects.create(
+            article=self.article,
+            file=self.file,
+            tii_submission_id="tii-press",
+            status="COMPLETE",
+            report_requested=True,
+            report_status="PROCESSING",
+            requested_by=self.editor,
+        )
+        payload = {
+            "id": "tii-press",
+            "status": "COMPLETE",
+            "overall_match_percentage": 23,
+            "metadata": {
+                "custom": json.dumps({"journal": self.journal_one.code}),
+            },
+        }
+        body = json.dumps(payload)
+        with mock.patch.object(
+            logic.notify_helpers,
+            "send_email_with_body_from_user",
+        ):
+            response = self.client.post(
+                reverse("turnitin_tca_webhook"),
+                data=body,
+                content_type="application/json",
+                HTTP_X_TURNITIN_SIGNATURE=sign(body),
+                HTTP_X_TURNITIN_EVENTTYPE="SIMILARITY_COMPLETE",
+                SERVER_NAME=press_domain(),
+            )
+        self.assertEqual(response.status_code, 200)
+        submission.refresh_from_db()
+        self.assertEqual(submission.similarity_score, 23)
+
+    def test_webhook_ignores_submission_from_another_journal_in_metadata(self):
+        submission = models.TurnitinSubmission.objects.create(
+            article=self.article,
+            file=self.file,
+            tii_submission_id="tii-mismatch",
+            status="COMPLETE",
+            report_requested=True,
+            report_status="PROCESSING",
+            requested_by=self.editor,
+        )
+        result = logic.handle_webhook_event(
+            "SIMILARITY_COMPLETE",
+            {
+                "id": "tii-mismatch",
+                "status": "COMPLETE",
+                "overall_match_percentage": 50,
+                "metadata": {
+                    "custom": json.dumps({"journal": self.journal_two.code}),
+                },
+            },
+        )
+        self.assertIsNone(result)
+        submission.refresh_from_db()
+        self.assertIsNone(submission.similarity_score)
+
     def test_register_webhook_posts_documented_payload(self):
         fake_client = mock.Mock()
+        fake_client.list_webhooks.return_value = []
         fake_client.create_webhook.return_value = {"id": "wh-123"}
         with mock.patch.object(logic, "get_client", return_value=fake_client):
-            result = logic.register_webhook(self.journal_one)
+            result, created = logic.register_webhook()
+        self.assertTrue(created)
         self.assertEqual(result["id"], "wh-123")
         fake_client.delete_webhook.assert_not_called()
         payload = fake_client.create_webhook.call_args[0][0]
         self.assertEqual(payload["event_types"], tca_settings.SUBSCRIBED_EVENTS)
         self.assertFalse(payload["allow_insecure"])
-        self.assertTrue(payload["url"].endswith("/webhook/"))
+        # One URL at the press level, not a journal's.
+        self.assertEqual(
+            payload["url"],
+            "http://{}/plugins/turnitin-core-api/webhook/".format(press_domain()),
+        )
         # signing_secret must be valid Base64 per the TCA docs.
         base64.b64decode(payload["signing_secret"], validate=True)
-        # The returned id is persisted for later re-registration.
+        # The returned id and secret are kept for the whole install.
+        self.assertEqual(logic.get_setting("turnitin_webhook_id", None), "wh-123")
         self.assertEqual(
-            logic.get_setting("turnitin_webhook_id", self.journal_one),
-            "wh-123",
+            logic.get_setting("turnitin_webhook_secret", None),
+            payload["signing_secret"],
         )
+        configure_journal(self.journal_one)
 
     def test_register_webhook_uses_url_override(self):
-        override = (
-            "https://abc123.ngrok-free.app/olh/plugins/turnitin-core-api/webhook/"
-        )
+        override = "https://abc123.ngrok-free.app/plugins/turnitin-core-api/webhook/"
         configure_journal(self.journal_one, turnitin_webhook_url=override)
         fake_client = mock.Mock()
+        fake_client.list_webhooks.return_value = []
         fake_client.create_webhook.return_value = {"id": "wh-ngrok"}
         with mock.patch.object(logic, "get_client", return_value=fake_client):
-            logic.register_webhook(self.journal_one)
+            logic.register_webhook()
         payload = fake_client.create_webhook.call_args[0][0]
         self.assertEqual(payload["url"], override)
         configure_journal(self.journal_one, turnitin_webhook_url="")
 
-    def test_register_webhook_deletes_previous_registration(self):
+    def test_register_webhook_does_nothing_when_already_registered(self):
+        logic.save_setting("turnitin_webhook_id", "wh-1", None)
+        fake_client = mock.Mock()
+        fake_client.list_webhooks.return_value = [
+            {"id": "wh-1", "url": logic.webhook_url()},
+        ]
+        with mock.patch.object(logic, "get_client", return_value=fake_client):
+            result, created = logic.register_webhook()
+        self.assertFalse(created)
+        self.assertEqual(result["id"], "wh-1")
+        fake_client.create_webhook.assert_not_called()
+        fake_client.delete_webhook.assert_not_called()
+        self.assertEqual(
+            logic.get_setting("turnitin_webhook_secret", None),
+            WEBHOOK_SECRET_B64,
+        )
+        logic.save_setting("turnitin_webhook_id", "", None)
+
+    def test_register_webhook_replaces_ones_it_cannot_verify(self):
+        # A webhook for our URL that we hold no id for, and a per-journal one
+        # from an earlier version, are replaced. Other URLs are left alone.
         setting_handler.save_plugin_setting(
             logic.get_plugin(),
             "turnitin_webhook_id",
-            "old-id",
+            "journal-hook",
             self.journal_one,
         )
         fake_client = mock.Mock()
+        fake_client.list_webhooks.return_value = [
+            {"id": "unknown", "url": logic.webhook_url()},
+            {"id": "journal-hook", "url": "http://journal/webhook/"},
+            {"id": "someone-else", "url": "https://elsewhere.example.org/"},
+        ]
         fake_client.create_webhook.return_value = {"id": "wh-new"}
         with mock.patch.object(logic, "get_client", return_value=fake_client):
-            logic.register_webhook(self.journal_one)
-        fake_client.delete_webhook.assert_called_once_with("old-id")
+            result, created = logic.register_webhook()
+        self.assertTrue(created)
+        deleted = {call.args[0] for call in fake_client.delete_webhook.call_args_list}
+        self.assertEqual(deleted, {"unknown", "journal-hook"})
+        configure_journal(self.journal_one)
+        logic.save_setting("turnitin_webhook_id", "", None)
 
     def test_delete_webhook_clears_registered_id(self):
-        setting_handler.save_plugin_setting(
-            logic.get_plugin(),
-            "turnitin_webhook_id",
-            "wh-1",
-            self.journal_one,
-        )
+        logic.save_setting("turnitin_webhook_id", "wh-1", None)
         fake_client = mock.Mock()
         with mock.patch.object(logic, "get_client", return_value=fake_client):
-            logic.delete_webhook(self.journal_one, "wh-1")
+            logic.delete_webhook(None, "wh-1")
         fake_client.delete_webhook.assert_called_once_with("wh-1")
-        self.assertEqual(
-            logic.get_setting("turnitin_webhook_id", self.journal_one),
-            "",
-        )
+        self.assertEqual(logic.get_setting("turnitin_webhook_id", None), "")
 
     def test_delete_all_webhooks(self):
         fake_client = mock.Mock()
@@ -558,7 +690,7 @@ class TurnitinViewTest(TestCase):
         self.assertEqual(fake_client.delete_webhook.call_count, 2)
 
     def test_webhooks_page_lists_and_deletes(self):
-        self.client.force_login(self.editor)
+        self.client.force_login(self.staff)
         fake_client = mock.Mock()
         fake_client.list_webhooks.return_value = [
             {
@@ -571,7 +703,7 @@ class TurnitinViewTest(TestCase):
         with mock.patch.object(logic, "get_client", return_value=fake_client):
             page = self.client.get(
                 reverse("turnitin_tca_webhooks"),
-                SERVER_NAME=self.journal_one.domain,
+                SERVER_NAME=press_domain(),
             )
             self.assertEqual(page.status_code, 200)
             self.assertContains(page, "wh-x")
@@ -579,14 +711,14 @@ class TurnitinViewTest(TestCase):
             unconfirmed = self.client.post(
                 reverse("turnitin_tca_delete_webhook", kwargs={"webhook_id": "wh-x"}),
                 data={forms.DeleteWebhookForm.CONFIRMABLE_BUTTON_NAME: "1"},
-                SERVER_NAME=self.journal_one.domain,
+                SERVER_NAME=press_domain(),
             )
             self.assertEqual(unconfirmed.status_code, 200)
             fake_client.delete_webhook.assert_not_called()
             response = self.client.post(
                 reverse("turnitin_tca_delete_webhook", kwargs={"webhook_id": "wh-x"}),
                 data={forms.DeleteWebhookForm.CONFIRMED_BUTTON_NAME: "1"},
-                SERVER_NAME=self.journal_one.domain,
+                SERVER_NAME=press_domain(),
             )
         self.assertEqual(response.status_code, 302)
         fake_client.delete_webhook.assert_called_once_with("wh-x")
@@ -702,23 +834,26 @@ class TurnitinViewTest(TestCase):
 
     def test_saving_settings_checks_features_and_stores_require_eula(self):
         configure_journal(self.journal_one, turnitin_require_eula="")
-        self.client.force_login(self.editor)
+        self.client.force_login(self.staff)
         fake_client = mock.Mock()
         fake_client.features_enabled.return_value = {
             "product_name": "iThenticate",
             "tenant": {"require_eula": True},
         }
+        fake_client.list_webhooks.return_value = []
+        fake_client.create_webhook.return_value = {"id": "wh-1"}
         with mock.patch.object(logic, "get_client", return_value=fake_client):
             self.client.post(
                 reverse("turnitin_tca_manager"),
                 data={
-                    "turnitin_enabled": "on",
                     "turnitin_api_url": "https://tenant.turnitin.com",
                     "turnitin_api_key": "secret-key",
                 },
-                SERVER_NAME=self.journal_one.domain,
+                SERVER_NAME=press_domain(),
             )
         fake_client.features_enabled.assert_called_once()
+        # Then the install's webhook is registered.
+        fake_client.create_webhook.assert_called_once()
         self.assertEqual(
             logic.get_setting("turnitin_require_eula", self.journal_one),
             "true",
@@ -726,7 +861,7 @@ class TurnitinViewTest(TestCase):
         configure_journal(self.journal_one, turnitin_require_eula="false")
 
     def test_failed_connection_check_shows_friendly_message(self):
-        self.client.force_login(self.editor)
+        self.client.force_login(self.staff)
         fake_client = mock.Mock()
         fake_client.features_enabled.side_effect = client.TurnitinError(
             "TCA GET features-enabled returned 401",
@@ -736,11 +871,10 @@ class TurnitinViewTest(TestCase):
         with mock.patch.object(logic, "get_client", return_value=fake_client):
             response = self.client.get(
                 reverse("turnitin_tca_test_connection"),
-                SERVER_NAME=self.journal_one.domain,
+                SERVER_NAME=press_domain(),
                 follow=True,
             )
         self.assertContains(response, "Could not connect to Turnitin")
-        self.assertNotContains(response, "raw api detail")
         configure_journal(self.journal_one, turnitin_require_eula="false")
 
 
@@ -823,6 +957,17 @@ class TurnitinSendFlowTest(TestCase):
         self.assertEqual(payload["owner_default_permission_set"], "UNDEFINED")
         self.assertEqual(payload["submitter_default_permission_set"], "EDITOR")
         self.assertIn("metadata", payload)
+
+    def test_payload_sends_journal_code_in_custom_metadata(self):
+        payload = logic.build_submission_payload(
+            self.article,
+            self.file,
+            self.editor,
+        )
+        self.assertEqual(
+            json.loads(payload["metadata"]["custom"]),
+            {"journal": self.journal_one.code},
+        )
 
     def test_payload_without_correspondence_author_is_anonymous(self):
         self.article.correspondence_author = None

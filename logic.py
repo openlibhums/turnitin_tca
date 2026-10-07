@@ -2,6 +2,7 @@ import base64
 import binascii
 import hashlib
 import hmac
+import json
 import secrets
 import uuid
 from collections import OrderedDict
@@ -10,11 +11,13 @@ from datetime import timedelta
 import bleach
 from bleach_allowlist import bleach_allowlist
 from django.contrib import messages
-from django.urls import reverse
+from django.urls import get_resolver, reverse
 from django.utils import timezone
 from django.utils.safestring import mark_safe
 
+from core import models as core_models
 from cron.models import Request
+from press import models as press_models
 from utils import setting_handler, notify_helpers
 from utils.logger import get_logger
 from utils.logic import get_current_request
@@ -29,25 +32,35 @@ def get_plugin():
     return plugin_settings.TurnitinTCAPlugin.get_self()
 
 
+def setting_journal(name, journal):
+    """The journal a setting is stored against: None for install-wide ones."""
+    if name in plugin_settings.INSTALL_SETTING_NAMES:
+        return None
+    return journal
+
+
 def get_setting(name, journal):
     setting = setting_handler.get_plugin_setting(
         get_plugin(),
         name,
-        journal,
+        setting_journal(name, journal),
         create=True,
     )
     return setting.processed_value
+
+
+def is_configured():
+    """Whether staff have entered the install-wide API URL and key."""
+    return bool(
+        get_setting("turnitin_api_url", None) and get_setting("turnitin_api_key", None)
+    )
 
 
 def is_enabled(journal):
     """A journal is configured if the plugin is on and the URL/key are set."""
     if not journal:
         return False
-    return bool(
-        get_setting("turnitin_enabled", journal)
-        and get_setting("turnitin_api_url", journal)
-        and get_setting("turnitin_api_key", journal)
-    )
+    return bool(get_setting("turnitin_enabled", journal) and is_configured())
 
 
 def get_client(journal, interactive=False, timeout=None, max_retries=None):
@@ -178,9 +191,7 @@ def article_report_rows(article):
 def failed_rows(rows):
     """The rows whose most recent send to Turnitin failed."""
     return [
-        row
-        for row in rows
-        if row["submission"] and row["submission"].status == "ERROR"
+        row for row in rows if row["submission"] and row["submission"].status == "ERROR"
     ]
 
 
@@ -262,6 +273,9 @@ def build_submission_payload(article, file_obj, submitter, eula_block=None):
             "original_submitted_time": (
                 article.date_submitted or timezone.now()
             ).isoformat(),
+            # Returned in webhook events, so an event can be matched to its
+            # journal.
+            "custom": json.dumps({"journal": journal.code}),
         },
     }
     if eula_block:
@@ -746,20 +760,42 @@ def build_eula_block(account, version, language="en-US"):
 
 
 def save_setting(name, value, journal):
-    setting_handler.save_plugin_setting(get_plugin(), name, value, journal)
+    setting_handler.save_plugin_setting(
+        get_plugin(),
+        name,
+        value,
+        setting_journal(name, journal),
+    )
+
+
+def adopt_journal_settings():
+    """Copy account settings saved per journal to the install-wide settings.
+
+    Earlier versions stored the API URL and key on each journal. If the
+    install-wide setting is empty, use the first journal's value.
+    """
+    for name in plugin_settings.SETTING_NAMES:
+        if get_setting(name, None):
+            continue
+        value = (
+            core_models.SettingValue.objects.filter(
+                setting__group__name="plugin:{}".format(get_plugin().name),
+                setting__name=name,
+                journal__isnull=False,
+            )
+            .exclude(value__isnull=True)
+            .exclude(value="")
+            .order_by("journal__pk")
+            .values_list("value", flat=True)
+            .first()
+        )
+        if value:
+            save_setting(name, value, None)
 
 
 def generate_signing_secret():
     """A fresh Base64-encoded signing secret, as required by TCA."""
     return base64.b64encode(secrets.token_bytes(32)).decode("ascii")
-
-
-def get_or_create_signing_secret(journal):
-    secret = get_setting("turnitin_webhook_secret", journal)
-    if not secret:
-        secret = generate_signing_secret()
-        save_setting("turnitin_webhook_secret", secret, journal)
-    return secret
 
 
 def signing_key(secret):
@@ -771,38 +807,81 @@ def signing_key(secret):
         return secret.encode("utf-8")
 
 
-def register_webhook(journal):
-    """Register (or re-register) the callback URL with Turnitin.
+def install_url(name):
+    """A plugin URL at the press level, from a journal or press request."""
+    # Reverse without the journal prefix a journal request adds.
+    path = "/" + get_resolver().reverse(name)
+    return press_models.Press.objects.first().site_url(path=path)
 
-    There is a limit of 10 webhooks per integration scope, so any previously
-    registered webhook is deleted first to avoid accumulating duplicates.
+
+def webhook_url():
+    """The single callback URL this install registers with Turnitin.
+
+    Turnitin sends every event to every webhook registered for an API key, so
+    the install registers one URL, at the press level, for all its journals.
     """
-    client = get_client(journal, interactive=True)
-    secret = get_or_create_signing_secret(journal)
-    url = get_setting("turnitin_webhook_url", journal) or journal.site_url(
-        path=reverse("turnitin_tca_webhook"),
+    override = get_setting("turnitin_webhook_url", None)
+    if override:
+        return override
+    return install_url("turnitin_tca_webhook")
+
+
+def journal_webhook_ids():
+    """Webhooks registered per journal by earlier versions of the plugin."""
+    return set(
+        core_models.SettingValue.objects.filter(
+            setting__group__name="plugin:{}".format(get_plugin().name),
+            setting__name="turnitin_webhook_id",
+            journal__isnull=False,
+        )
+        .exclude(value__isnull=True)
+        .exclude(value="")
+        .values_list("value", flat=True)
     )
 
-    existing_id = get_setting("turnitin_webhook_id", journal)
-    if existing_id:
-        try:
-            client.delete_webhook(existing_id)
-        except TurnitinError as exc:
-            logger.warning("Could not delete old webhook %s: %s", existing_id, exc)
 
+def register_webhook(journal=None):
+    """Register this install's webhook with Turnitin, unless it already is.
+
+    If the webhook URL is already registered with the secret we hold, nothing
+    is changed. A webhook for our URL whose secret we no longer hold cannot be
+    verified, so it is replaced, as are the per-journal webhooks registered by
+    earlier versions of the plugin. Returns the webhook and whether it was
+    created.
+    """
+    client = get_client(None, interactive=True)
+    url = webhook_url()
+    hooks = client.list_webhooks()
+    registered_id = get_setting("turnitin_webhook_id", None)
+    secret = get_setting("turnitin_webhook_secret", None)
+
+    for hook in hooks:
+        if hook.get("url") == url and hook.get("id") == registered_id and secret:
+            return hook, False
+
+    replace = journal_webhook_ids()
+    for hook in hooks:
+        if hook.get("url") == url or hook.get("id") in replace:
+            try:
+                client.delete_webhook(hook["id"])
+            except TurnitinError as exc:
+                logger.warning("Could not delete old webhook %s: %s", hook["id"], exc)
+
+    secret = generate_signing_secret()
+    save_setting("turnitin_webhook_secret", secret, None)
     payload = {
         "signing_secret": secret,
-        "description": "Janeway: {}".format(journal.name),
+        "description": "Janeway",
         "url": url,
         "event_types": plugin_settings.SUBSCRIBED_EVENTS,
         "allow_insecure": False,
     }
     result = client.create_webhook(payload)
-    save_setting("turnitin_webhook_id", result.get("id", ""), journal)
-    return result
+    save_setting("turnitin_webhook_id", result.get("id", ""), None)
+    return result, True
 
 
-def list_webhooks(journal):
+def list_webhooks(journal=None):
     """All webhooks currently registered at Turnitin for this scope."""
     return get_client(journal, interactive=True).list_webhooks()
 
@@ -814,7 +893,7 @@ def delete_webhook(journal, webhook_id):
         save_setting("turnitin_webhook_id", "", journal)
 
 
-def delete_all_webhooks(journal):
+def delete_all_webhooks(journal=None):
     """Delete every webhook registered for this scope. Returns the count."""
     client = get_client(journal, interactive=True)
     hooks = client.list_webhooks()
@@ -824,8 +903,8 @@ def delete_all_webhooks(journal):
     return len(hooks)
 
 
-def verify_webhook_signature(journal, body_bytes, signature):
-    secret = get_setting("turnitin_webhook_secret", journal)
+def verify_webhook_signature(body_bytes, signature):
+    secret = get_setting("turnitin_webhook_secret", None)
     if not secret:
         # No secret configured: cannot verify, reject for safety.
         return False
@@ -837,28 +916,40 @@ def verify_webhook_signature(journal, body_bytes, signature):
     return hmac.compare_digest(expected, (signature or "").strip())
 
 
-def handle_webhook_event(event_type, payload, journal):
+def event_journal_code(payload):
+    """The journal code sent in metadata.custom with Create Submission."""
+    custom = (payload.get("metadata") or {}).get("custom")
+    try:
+        return (json.loads(custom) or {}).get("journal")
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+def handle_webhook_event(event_type, payload, journal=None):
     """Advance a submission's state in response to a TCA webhook event.
 
-    The lookup is scoped to ``journal`` so that a signature valid for one
-    journal can only ever mutate that journal's own submissions, never another
-    tenant's (see #4313-adjacent hardening; the signature proves the caller
-    holds this journal's secret, not that the submission belongs to it).
+    One webhook serves the whole install, so the submission is found by its
+    Turnitin ID. When the event carries the journal code from metadata.custom,
+    or arrives at a journal's URL, the submission must belong to that journal.
     """
     submission_id = payload.get("id") or payload.get("submission_id")
     if not submission_id:
         return None
 
-    try:
-        submission = models.TurnitinSubmission.objects.get(
-            tii_submission_id=submission_id,
-            article__journal=journal,
-        )
-    except models.TurnitinSubmission.DoesNotExist:
+    submissions = models.TurnitinSubmission.objects.filter(
+        tii_submission_id=submission_id,
+    )
+    if journal:
+        submissions = submissions.filter(article__journal=journal)
+    code = event_journal_code(payload)
+    if code:
+        submissions = submissions.filter(article__journal__code=code)
+    submission = submissions.first()
+    if not submission:
         logger.warning(
-            "Turnitin webhook for unknown submission %s on journal %s",
+            "Turnitin webhook for unknown submission %s (journal %s)",
             submission_id,
-            journal.code,
+            code or (journal.code if journal else "not given"),
         )
         return None
 
