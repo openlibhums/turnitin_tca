@@ -24,10 +24,17 @@ MANAGER_URL = "turnitin_tca_manager"
 JANEWAY_VERSION = "1.7.0"
 IS_WORKFLOW_PLUGIN = False
 
-# Plugin settings editable from the manager form. The webhook secret and id are
-# managed by the webhook registration flow, not edited by hand.
-SETTING_NAMES = [
+# An install has one Turnitin account, so its settings are install-wide: staff
+# set them once and every journal uses them. Each journal only chooses whether
+# to use Turnitin.
+JOURNAL_SETTING_NAMES = [
     "turnitin_enabled",
+]
+
+# Install-wide settings editable from the install settings form. The webhook
+# secret and id are managed by the webhook registration flow, not edited by
+# hand.
+SETTING_NAMES = [
     "turnitin_api_url",
     "turnitin_api_key",
     "turnitin_index_submissions",
@@ -40,6 +47,13 @@ SETTING_NAMES = [
 # whenever the API URL and key are saved, and stored here as "true"/"false"
 # ("" until it has been fetched).
 REQUIRE_EULA_SETTING = "turnitin_require_eula"
+
+# Every setting stored once for the whole install rather than per journal.
+INSTALL_SETTING_NAMES = SETTING_NAMES + [
+    REQUIRE_EULA_SETTING,
+    "turnitin_webhook_secret",
+    "turnitin_webhook_id",
+]
 
 # The default repositories a similarity report is generated against.
 DEFAULT_SEARCH_REPOSITORIES = [
@@ -95,6 +109,9 @@ def install():
     update_settings(
         file_path="plugins/turnitin_tca/install/settings.json",
     )
+    from plugins.turnitin_tca import logic
+
+    logic.adopt_journal_settings()
     install_cron()
 
 

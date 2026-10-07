@@ -22,7 +22,9 @@ python src/manage.py install_plugins turnitin_tca
 python src/manage.py migrate turnitin_tca
 ```
 
-Then, as an editor, open **Turnitin Core API** from the manager and enter your API URL and API key. Saving checks the connection and whether your licence requires the EULA; **Test Connection** repeats the check. Then use **Register Webhook** so reports notify Janeway when they are ready. Registration calls Turnitin's `POST /api/v1/webhooks` endpoint with the callback URL and a Base64 signing secret that is generated for you; that same secret is then used to verify the `X-Turnitin-Signature` on incoming callbacks.
+The Turnitin account is set once for the whole install. As a staff user, open **Turnitin Core API** from the press-level plugin list (`/plugins/turnitin-core-api/` on the press domain) and enter the API URL and API key. Saving checks the connection and whether your licence requires the EULA, then registers the install's webhook; **Test Connection** and **Register Webhook** repeat these. Each journal then turns the integration on from its own **Turnitin Core API** page, which shows the install's EULA status.
+
+Turnitin sends every event to every webhook registered for an API key, so the install registers a single callback URL (`/plugins/turnitin-core-api/webhook/` on the press domain), and only if it is not already registered. Registration calls `POST /api/v1/webhooks` with a Base64 signing secret that is generated for you; that secret verifies the `X-Turnitin-Signature` on incoming callbacks. Each submission sends its journal code in `metadata.custom`, so the receiver can check the event belongs to that journal. Earlier versions stored the account and a webhook on each journal: `install_plugins` copies the first journal's account settings to the install, and registering replaces the old per-journal webhooks.
 
 ## Developing and testing locally
 

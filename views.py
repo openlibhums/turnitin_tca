@@ -1,6 +1,7 @@
 import json
 
 from django.contrib import messages
+from django.contrib.admin.views.decorators import staff_member_required
 from django.http import HttpResponse, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import render, redirect, reverse, get_object_or_404
 from django.views.decorators.csrf import csrf_exempt
@@ -10,24 +11,56 @@ from plugins.turnitin_tca import forms, logic, models, plugin_settings
 from plugins.turnitin_tca.client import TurnitinError
 from security.decorators import editor_user_required, has_journal
 from submission import models as submission_models
-from utils import setting_handler
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
+def manager(request):
+    """The journal's Turnitin page, or the install settings at press level."""
+    if request.journal:
+        return journal_manager(request)
+    return install_manager(request)
+
+
 @has_journal
 @editor_user_required
-def manager(request):
-    plugin = logic.get_plugin()
+def journal_manager(request):
     initial = {
-        name: setting_handler.get_plugin_setting(
-            plugin,
-            name,
-            request.journal,
-            create=True,
-        ).processed_value
-        for name in plugin_settings.SETTING_NAMES
+        name: logic.get_setting(name, request.journal)
+        for name in plugin_settings.JOURNAL_SETTING_NAMES
+    }
+    journal_form = forms.TurnitinJournalForm(initial=initial)
+
+    if request.POST:
+        journal_form = forms.TurnitinJournalForm(request.POST)
+        if journal_form.is_valid():
+            for name, value in journal_form.cleaned_data.items():
+                logic.save_setting(name, value, request.journal)
+            messages.add_message(
+                request,
+                messages.SUCCESS,
+                "Turnitin settings updated.",
+            )
+            return redirect(reverse("turnitin_tca_manager"))
+
+    template = "turnitin_tca/journal_manager.html"
+    context = {
+        "journal_form": journal_form,
+        "configured": logic.is_configured(),
+        "install_settings_url": logic.install_url("turnitin_tca_manager"),
+        "require_eula": logic.get_setting(
+            plugin_settings.REQUIRE_EULA_SETTING,
+            None,
+        ),
+    }
+    return render(request, template, context)
+
+
+@staff_member_required
+def install_manager(request):
+    initial = {
+        name: logic.get_setting(name, None) for name in plugin_settings.SETTING_NAMES
     }
     admin_form = forms.TurnitinAdminForm(initial=initial)
 
@@ -35,52 +68,41 @@ def manager(request):
         admin_form = forms.TurnitinAdminForm(request.POST)
         if admin_form.is_valid():
             for name, value in admin_form.cleaned_data.items():
-                setting_handler.save_plugin_setting(
-                    plugin,
-                    name,
-                    value,
-                    request.journal,
-                )
+                logic.save_setting(name, value, None)
             messages.add_message(
                 request,
                 messages.SUCCESS,
                 "Turnitin settings updated.",
             )
             # The first call with new credentials is Get Features Enabled,
-            # which also tells us whether the tenant requires the EULA.
-            if logic.is_enabled(request.journal):
-                check_connection(request)
+            # which also tells us whether the tenant requires the EULA. Then
+            # make sure the install's webhook is registered.
+            if logic.is_configured():
+                if check_connection(request):
+                    register(request)
             else:
                 # The credentials may now belong to another tenant, so ask
                 # again once the integration is configured.
-                logic.save_setting(
-                    plugin_settings.REQUIRE_EULA_SETTING,
-                    "",
-                    request.journal,
-                )
+                logic.save_setting(plugin_settings.REQUIRE_EULA_SETTING, "", None)
             return redirect(reverse("turnitin_tca_manager"))
 
-    webhook_url = logic.get_setting(
-        "turnitin_webhook_url",
-        request.journal,
-    ) or request.journal.site_url(path=reverse("turnitin_tca_webhook"))
     template = "turnitin_tca/manager.html"
     context = {
         "admin_form": admin_form,
-        "webhook_url": webhook_url,
-        "webhook_id": logic.get_setting("turnitin_webhook_id", request.journal),
+        "webhook_url": logic.webhook_url(),
+        "webhook_id": logic.get_setting("turnitin_webhook_id", None),
         "require_eula": logic.get_setting(
             plugin_settings.REQUIRE_EULA_SETTING,
-            request.journal,
+            None,
         ),
     }
     return render(request, template, context)
 
 
 def check_connection(request):
-    """Call Get Features Enabled and tell the editor how it went."""
+    """Call Get Features Enabled and tell staff how it went."""
     try:
-        features = logic.refresh_features(request.journal)
+        features = logic.refresh_features(None)
     except TurnitinError as exc:
         logic.editor_error(
             request,
@@ -88,7 +110,7 @@ def check_connection(request):
             "try again later.",
             exc,
         )
-        return
+        return False
     product = features.get("product_name", "Turnitin")
     if logic.tenant_requires_eula(features):
         eula = "Editors will be asked to accept the Turnitin EULA before sending files."
@@ -99,41 +121,47 @@ def check_connection(request):
         messages.SUCCESS,
         "Connection succeeded. Licensed product: {}. {}".format(product, eula),
     )
+    return True
 
 
-@has_journal
-@editor_user_required
-def test_connection(request):
-    check_connection(request)
-    return redirect(reverse("turnitin_tca_manager"))
-
-
-@has_journal
-@editor_user_required
-@require_POST
-def register_webhook(request):
-    if not logic.is_enabled(request.journal):
-        messages.add_message(
-            request,
-            messages.ERROR,
-            "Set the API URL and key before registering the webhook.",
-        )
-        return redirect(reverse("turnitin_tca_manager"))
-
+def register(request):
+    """Register the install's webhook unless it already is, and say which."""
     try:
-        result = logic.register_webhook(request.journal)
-        messages.add_message(
-            request,
-            messages.SUCCESS,
-            "Webhook registered with Turnitin (id {}). A signing secret was "
-            "generated automatically.".format(result.get("id", "")),
-        )
+        result, created = logic.register_webhook()
     except TurnitinError as exc:
         logic.editor_error(
             request,
             "The webhook could not be registered. Please try again later.",
             exc,
         )
+        return
+    if created:
+        message = (
+            "Webhook registered with Turnitin (id {}). A signing secret was "
+            "generated automatically.".format(result.get("id", ""))
+        )
+    else:
+        message = "The webhook is already registered with Turnitin."
+    messages.add_message(request, messages.SUCCESS, message)
+
+
+@staff_member_required
+def test_connection(request):
+    check_connection(request)
+    return redirect(reverse("turnitin_tca_manager"))
+
+
+@staff_member_required
+@require_POST
+def register_webhook(request):
+    if not logic.is_configured():
+        messages.add_message(
+            request,
+            messages.ERROR,
+            "Set the API URL and key before registering the webhook.",
+        )
+        return redirect(reverse("turnitin_tca_manager"))
+    register(request)
     return redirect(reverse("turnitin_tca_manager"))
 
 
@@ -141,7 +169,7 @@ def render_webhooks(request, confirm_modal=None, confirm_form_id=None):
     """Render the webhooks list, optionally with a delete confirmation modal."""
     hooks = []
     try:
-        hooks = logic.list_webhooks(request.journal)
+        hooks = logic.list_webhooks()
     except TurnitinError as exc:
         logic.editor_error(
             request,
@@ -151,7 +179,7 @@ def render_webhooks(request, confirm_modal=None, confirm_form_id=None):
     template = "turnitin_tca/webhooks.html"
     context = {
         "webhooks": hooks,
-        "registered_id": logic.get_setting("turnitin_webhook_id", request.journal),
+        "registered_id": logic.get_setting("turnitin_webhook_id", None),
         "confirmable_button_name": forms.DeleteWebhookForm.CONFIRMABLE_BUTTON_NAME,
         "confirm_modal": confirm_modal,
         "confirm_form_id": confirm_form_id,
@@ -159,14 +187,12 @@ def render_webhooks(request, confirm_modal=None, confirm_form_id=None):
     return render(request, template, context)
 
 
-@has_journal
-@editor_user_required
+@staff_member_required
 def webhooks(request):
     return render_webhooks(request)
 
 
-@has_journal
-@editor_user_required
+@staff_member_required
 @require_POST
 def delete_webhook(request, webhook_id):
     form = forms.DeleteWebhookForm(request.POST)
@@ -178,7 +204,7 @@ def delete_webhook(request, webhook_id):
             confirm_form_id="del-{}".format(webhook_id),
         )
     try:
-        logic.delete_webhook(request.journal, webhook_id)
+        logic.delete_webhook(None, webhook_id)
         messages.add_message(request, messages.SUCCESS, "Webhook deleted.")
     except TurnitinError as exc:
         logic.editor_error(
@@ -189,8 +215,7 @@ def delete_webhook(request, webhook_id):
     return redirect(reverse("turnitin_tca_webhooks"))
 
 
-@has_journal
-@editor_user_required
+@staff_member_required
 @require_POST
 def delete_all_webhooks(request):
     form = forms.DeleteAllWebhooksForm(request.POST)
@@ -202,7 +227,7 @@ def delete_all_webhooks(request):
             confirm_form_id="del-all",
         )
     try:
-        count = logic.delete_all_webhooks(request.journal)
+        count = logic.delete_all_webhooks()
         messages.add_message(
             request,
             messages.SUCCESS,
@@ -229,7 +254,9 @@ def article_reports(request, article_id):
     )
     template = "turnitin_tca/article.html"
     context = logic.article_page_context(article, request.journal)
-    context["confirmable_button_name"] = forms.RegenerateReportForm.CONFIRMABLE_BUTTON_NAME
+    context["confirmable_button_name"] = (
+        forms.RegenerateReportForm.CONFIRMABLE_BUTTON_NAME
+    )
     return render(request, template, context)
 
 
@@ -549,12 +576,12 @@ def regenerate_report(request, article_id, submission_id):
 @csrf_exempt
 @require_POST
 def webhook(request):
+    # Registered at the press level; journal-level URLs from earlier versions
+    # still work until their webhooks are replaced.
     journal = getattr(request, "journal", None)
-    if not journal:
-        return HttpResponseBadRequest("No journal context.")
 
     signature = request.META.get("HTTP_X_TURNITIN_SIGNATURE", "")
-    if not logic.verify_webhook_signature(journal, request.body, signature):
+    if not logic.verify_webhook_signature(request.body, signature):
         logger.warning("Rejected Turnitin webhook with bad signature.")
         return HttpResponse(status=403)
 

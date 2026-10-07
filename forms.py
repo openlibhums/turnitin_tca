@@ -40,12 +40,17 @@ class DeleteAllWebhooksForm(ConfirmableForm):
     )
 
 
-class TurnitinAdminForm(forms.Form):
+class TurnitinJournalForm(forms.Form):
     turnitin_enabled = forms.BooleanField(
         label="Turnitin Core API enabled",
         required=False,
         help_text="Turn the integration on for this journal.",
     )
+
+
+class TurnitinAdminForm(forms.Form):
+    """The install-wide Turnitin account settings, shared by every journal."""
+
     turnitin_api_url = forms.CharField(
         label="API URL",
         required=False,
@@ -57,9 +62,8 @@ class TurnitinAdminForm(forms.Form):
         widget=forms.PasswordInput(render_value=True),
     )
     turnitin_index_submissions = forms.BooleanField(
-        label="Index submissions",
+        label="Add submissions to your iThenticate repository for future comparison",
         required=False,
-        help_text="Add sent files to the Turnitin index for future comparison.",
     )
     turnitin_save_report_changes = forms.BooleanField(
         label="Save iThenticate report change",
@@ -74,7 +78,7 @@ class TurnitinAdminForm(forms.Form):
         label="Webhook URL Override",
         required=False,
         help_text=(
-            "Leave blank to use this journal's own webhook URL. Set to a tunnel "
+            "Leave blank to use this install's webhook URL. Set to a tunnel "
             "URL (e.g. ngrok) to receive callbacks during development."
         ),
     )
