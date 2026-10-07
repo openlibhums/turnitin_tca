@@ -9,9 +9,11 @@ Sends manuscript, data/figure, source, revision and review-round files to the [T
 - Sends a file (Create Submission then Upload File) and, once Turnitin reports the upload as processed, automatically requests the similarity report.
 - A webhook receiver (`SUBMISSION_COMPLETE` / `SIMILARITY_COMPLETE`) that stores the score and emails the requesting editor. Incoming webhooks are verified against a shared signing secret. This is the primary mechanism for advancing submissions.
 - A polling fallback (`poll_turnitin_tca` management command) for the rare submission that does not receive a webhook. Installation registers this in the crontab automatically to run every 20 minutes.
-- Optional EULA presentation and acceptance recording, off by default. When off, Turnitin handles any click-through at report-view time. Either way, a `451` from Turnitin sends the editor to the EULA page and the send (or viewer launch) continues once they accept.
+- EULA presentation that follows the Turnitin licence rather than a setting. Saving the API URL and key calls **Get Features Enabled**, and `tenant.require_eula` decides whether editors must accept the EULA before sending a file (iThenticate bought directly from Turnitin) or never see it (iThenticate bought through Crossref). The viewer launch never sends EULA attributes; the report viewer presents the EULA itself when needed. A `451` from Turnitin still sends the editor to the EULA page and the send (or viewer launch) continues once they accept.
+- A **Save iThenticate report change** setting, on by default, that keeps changes made in the report viewer (`save_changes`). When the overall match percentage changes, the `SIMILARITY_UPDATED` webhook updates the stored score.
 - Background retry of sends that fail on a transient error (network, `429` or `5xx`), and **Resend** / **Resend all failed** actions for sends that fail permanently.
-- Submissions carry the article as their `group` and the journal as their `group_context`.
+- Submissions carry the article as their `group` and the journal as their `group_context`. The owner is the article's correspondence author; Janeway requires one, but should it ever be missing the submission is sent as "Anonymous Author" with a random UUID, never as the sending editor. Owner, submitter and viewer permission sets are `UNDEFINED`, `EDITOR` and `EDITOR`.
+- Editors see user-friendly error messages. Turnitin's own error text is logged and shown only to staff (Janeway admins), so they can raise a support ticket.
 
 ## Installation
 
@@ -20,11 +22,11 @@ python src/manage.py install_plugins turnitin_tca
 python src/manage.py migrate turnitin_tca
 ```
 
-Then, as an editor, open **Turnitin Core API** from the manager and enter your API URL and API key. Use **Test Connection** to validate credentials, then **Register Webhook** so reports notify Janeway when they are ready. Registration calls Turnitin's `POST /api/v1/webhooks` endpoint with the callback URL and a Base64 signing secret that is generated for you; that same secret is then used to verify the `X-Turnitin-Signature` on incoming callbacks.
+Then, as an editor, open **Turnitin Core API** from the manager and enter your API URL and API key. Saving checks the connection and whether your licence requires the EULA; **Test Connection** repeats the check. Then use **Register Webhook** so reports notify Janeway when they are ready. Registration calls Turnitin's `POST /api/v1/webhooks` endpoint with the callback URL and a Base64 signing secret that is generated for you; that same secret is then used to verify the `X-Turnitin-Signature` on incoming callbacks.
 
 ## Developing and testing locally
 
-Turnitin requires the webhook callback URL to be HTTPS and publicly reachable, so a `http://localhost` dev box cannot receive callbacks. Webhook handling is covered by the test suite, which posts a dummy signed payload to the receiver and asserts the resulting state change. Interactive calls (Test Connection, Register Webhook, View Report) use a single attempt with short timeouts so a button never hangs, and any error from Turnitin (including the 4xx body) is shown to the editor.
+Turnitin requires the webhook callback URL to be HTTPS and publicly reachable, so a `http://localhost` dev box cannot receive callbacks. Webhook handling is covered by the test suite, which posts a dummy signed payload to the receiver and asserts the resulting state change. Interactive calls (Test Connection, Register Webhook, View Report) use a single attempt with short timeouts so a button never hangs. Errors from Turnitin (including the 4xx body) are logged and shown to staff users; other editors see a plain message.
 
 To receive real callbacks on a dev box, expose the server with a tunnel and set **Webhook URL Override** in the manager to the tunnel's callback URL.
 

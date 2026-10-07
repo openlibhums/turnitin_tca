@@ -56,18 +56,19 @@ class TurnitinAdminForm(forms.Form):
         required=False,
         widget=forms.PasswordInput(render_value=True),
     )
-    turnitin_eula_acceptance = forms.BooleanField(
-        label="Present and record EULA acceptance",
-        required=False,
-        help_text=(
-            "When off, the EULA is not shown and Turnitin handles any "
-            "click-through when the report is viewed."
-        ),
-    )
     turnitin_index_submissions = forms.BooleanField(
         label="Index submissions",
         required=False,
         help_text="Add sent files to the Turnitin index for future comparison.",
+    )
+    turnitin_save_report_changes = forms.BooleanField(
+        label="Save iThenticate report change",
+        required=False,
+        help_text=(
+            "Keep changes made in the report viewer (such as excluded "
+            "sources) for the next time the report is opened. If the "
+            "similarity score changes, Janeway is told the new score."
+        ),
     )
     turnitin_webhook_url = forms.URLField(
         label="Webhook URL Override",
