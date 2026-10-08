@@ -248,6 +248,17 @@ def delete_all_webhooks(request):
 
 @has_journal
 @editor_user_required
+def articles(request):
+    template = "turnitin_tca/articles.html"
+    context = {
+        "articles": logic.articles_in_review(request.journal),
+        "enabled": logic.is_enabled(request.journal),
+    }
+    return render(request, template, context)
+
+
+@has_journal
+@editor_user_required
 def article_reports(request, article_id):
     article = get_object_or_404(
         submission_models.Article.objects.prefetch_related(

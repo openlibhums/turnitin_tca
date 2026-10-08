@@ -11,6 +11,7 @@ from datetime import timedelta
 import bleach
 from bleach_allowlist import bleach_allowlist
 from django.contrib import messages
+from django.db.models import Count, Max
 from django.urls import get_resolver, reverse
 from django.utils import timezone
 from django.utils.safestring import mark_safe
@@ -18,6 +19,7 @@ from django.utils.safestring import mark_safe
 from core import models as core_models
 from cron.models import Request
 from press import models as press_models
+from submission import models as submission_models
 from utils import setting_handler, notify_helpers
 from utils.logger import get_logger
 from utils.logic import get_current_request
@@ -208,6 +210,29 @@ def article_page_context(article, journal):
             forms.ResendFailedForm.CONFIRMABLE_BUTTON_NAME
         ),
     }
+
+
+REVIEW_LIST_STAGES = (
+    submission_models.STAGE_UNASSIGNED,
+    submission_models.STAGE_ASSIGNED,
+    submission_models.STAGE_UNDER_REVIEW,
+    submission_models.STAGE_UNDER_REVISION,
+)
+
+
+def articles_in_review(journal):
+    """The journal's articles from submission to the end of review."""
+    return (
+        submission_models.Article.objects.filter(
+            journal=journal,
+            stage__in=REVIEW_LIST_STAGES,
+        )
+        .annotate(
+            turnitin_count=Count("turnitin_submissions"),
+            turnitin_max_score=Max("turnitin_submissions__similarity_score"),
+        )
+        .order_by("-date_submitted")
+    )
 
 
 def owner_metadata(article):

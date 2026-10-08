@@ -15,6 +15,7 @@ from django.utils import timezone
 
 from core import models as core_models
 from press import models as press_models
+from submission import models as submission_models
 from utils import setting_handler
 from utils.testing import helpers
 
@@ -357,6 +358,18 @@ class TurnitinHookTest(TestCase):
         output = hooks.review_action_hook(self.make_context(self.journal_two))
         self.assertEqual(output, "")
 
+    def test_nav_hook_links_article_list_when_enabled(self):
+        output = hooks.nav_hook(self.make_context(self.journal_one))
+        self.assertIn(reverse("turnitin_tca_articles"), output)
+
+    def test_nav_hook_empty_when_disabled(self):
+        output = hooks.nav_hook(self.make_context(self.journal_two))
+        self.assertEqual(output, "")
+
+    def test_nav_hook_empty_without_journal(self):
+        output = hooks.nav_hook(self.make_context(None))
+        self.assertEqual(output, "")
+
 
 @override_settings(URL_CONFIG="domain")
 class TurnitinViewTest(TestCase):
@@ -396,6 +409,37 @@ class TurnitinViewTest(TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertIn(self.file.pk, [r["file"].pk for r in response.context["rows"]])
+
+    def test_article_list_shows_journal_articles_in_review(self):
+        self.article.stage = submission_models.STAGE_UNDER_REVIEW
+        self.article.save()
+        self.other_article.stage = submission_models.STAGE_UNDER_REVIEW
+        self.other_article.save()
+        self.client.force_login(self.editor)
+        response = self.client.get(
+            reverse("turnitin_tca_articles"),
+            SERVER_NAME=self.journal_one.domain,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(list(response.context["articles"]), [self.article])
+
+    def test_article_list_leaves_out_published_articles(self):
+        self.article.stage = submission_models.STAGE_PUBLISHED
+        self.article.save()
+        self.client.force_login(self.editor)
+        response = self.client.get(
+            reverse("turnitin_tca_articles"),
+            SERVER_NAME=self.journal_one.domain,
+        )
+        self.assertEqual(list(response.context["articles"]), [])
+
+    def test_article_list_denied_to_non_editor(self):
+        self.client.force_login(self.author)
+        response = self.client.get(
+            reverse("turnitin_tca_articles"),
+            SERVER_NAME=self.journal_one.domain,
+        )
+        self.assertNotEqual(response.status_code, 200)
 
     def test_article_page_denied_to_non_editor(self):
         self.client.force_login(self.author)
