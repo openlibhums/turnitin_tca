@@ -133,5 +133,140 @@
     "value": {
       "default": ""
     }
+  },
+  {
+    "group": {
+      "name": "plugin:turnitin_tca"
+    },
+    "setting": {
+      "description": "Leave text in quotation marks out of the similarity score. Sent as exclude_quotes when a report is generated; editors can still change it in the report viewer.",
+      "is_translatable": false,
+      "name": "turnitin_exclude_quotes",
+      "pretty_name": "Exclude quotes",
+      "type": "boolean"
+    },
+    "value": {
+      "default": ""
+    }
+  },
+  {
+    "group": {
+      "name": "plugin:turnitin_tca"
+    },
+    "setting": {
+      "description": "Leave the reference list out of the similarity score. Sent as exclude_bibliography when a report is generated; editors can still change it in the report viewer.",
+      "is_translatable": false,
+      "name": "turnitin_exclude_bibliography",
+      "pretty_name": "Exclude bibliography",
+      "type": "boolean"
+    },
+    "value": {
+      "default": ""
+    }
+  },
+  {
+    "group": {
+      "name": "plugin:turnitin_tca"
+    },
+    "setting": {
+      "description": "Leave in-text citations out of the similarity score. Sent as exclude_citations when a report is generated; editors can still change it in the report viewer.",
+      "is_translatable": false,
+      "name": "turnitin_exclude_citations",
+      "pretty_name": "Exclude citations",
+      "type": "boolean"
+    },
+    "value": {
+      "default": ""
+    }
+  },
+  {
+    "group": {
+      "name": "plugin:turnitin_tca"
+    },
+    "setting": {
+      "description": "Leave the abstract out of the similarity score. Sent as exclude_abstract when a report is generated; editors can still change it in the report viewer.",
+      "is_translatable": false,
+      "name": "turnitin_exclude_abstract",
+      "pretty_name": "Exclude abstract",
+      "type": "boolean"
+    },
+    "value": {
+      "default": ""
+    }
+  },
+  {
+    "group": {
+      "name": "plugin:turnitin_tca"
+    },
+    "setting": {
+      "description": "Leave the methods section out of the similarity score. Sent as exclude_methods when a report is generated; editors can still change it in the report viewer.",
+      "is_translatable": false,
+      "name": "turnitin_exclude_methods",
+      "pretty_name": "Exclude methods",
+      "type": "boolean"
+    },
+    "value": {
+      "default": ""
+    }
+  },
+  {
+    "group": {
+      "name": "plugin:turnitin_tca"
+    },
+    "setting": {
+      "description": "Leave out the custom sections defined in your iThenticate account. Sent as exclude_custom_sections when a report is generated; editors can still change it in the report viewer.",
+      "is_translatable": false,
+      "name": "turnitin_exclude_custom_sections",
+      "pretty_name": "Exclude custom sections",
+      "type": "boolean"
+    },
+    "value": {
+      "default": ""
+    }
+  },
+  {
+    "group": {
+      "name": "plugin:turnitin_tca"
+    },
+    "setting": {
+      "description": "Leave matches against preprints out of the similarity score. Sent as exclude_preprints when a report is generated; editors can still change it in the report viewer.",
+      "is_translatable": false,
+      "name": "turnitin_exclude_preprints",
+      "pretty_name": "Exclude preprints",
+      "type": "boolean"
+    },
+    "value": {
+      "default": ""
+    }
+  },
+  {
+    "group": {
+      "name": "plugin:turnitin_tca"
+    },
+    "setting": {
+      "description": "Leave matches shorter than the word count below out of the similarity score. Sent as exclude_small_matches when a report is generated; editors can still change it in the report viewer.",
+      "is_translatable": false,
+      "name": "turnitin_exclude_small_matches",
+      "pretty_name": "Exclude small matches",
+      "type": "boolean"
+    },
+    "value": {
+      "default": ""
+    }
+  },
+  {
+    "group": {
+      "name": "plugin:turnitin_tca"
+    },
+    "setting": {
+      "description": "The minimum number of words a match must have to count when small matches are excluded (exclude_small_matches). Turnitin's minimum is 8.",
+      "is_translatable": false,
+      "name": "turnitin_small_match_words",
+      "pretty_name": "Small match word count",
+      "type": "number"
+    },
+    "value": {
+      "default": "8"
+    }
   }
 ]

@@ -2,6 +2,7 @@ from django import forms
 from django.utils.translation import gettext_lazy as _
 
 from core.forms.forms import ConfirmableForm
+from plugins.turnitin_tca import plugin_settings
 
 
 class RegenerateReportForm(ConfirmableForm):
@@ -40,7 +41,74 @@ class DeleteAllWebhooksForm(ConfirmableForm):
     )
 
 
-class TurnitinJournalForm(forms.Form):
+class ReportOptionsForm(forms.Form):
+    """The exclusion options sent when a similarity report is generated."""
+
+    turnitin_exclude_quotes = forms.BooleanField(
+        label="Exclude quotes",
+        required=False,
+        help_text="Leave text in quotation marks out of the similarity score.",
+    )
+    turnitin_exclude_bibliography = forms.BooleanField(
+        label="Exclude bibliography",
+        required=False,
+        help_text="Leave the reference list out of the similarity score.",
+    )
+    turnitin_exclude_citations = forms.BooleanField(
+        label="Exclude citations",
+        required=False,
+        help_text="Leave in-text citations out of the similarity score.",
+    )
+    turnitin_exclude_abstract = forms.BooleanField(
+        label="Exclude abstract",
+        required=False,
+        help_text="Leave the abstract out of the similarity score.",
+    )
+    turnitin_exclude_methods = forms.BooleanField(
+        label="Exclude methods",
+        required=False,
+        help_text="Leave the methods section out of the similarity score.",
+    )
+    turnitin_exclude_custom_sections = forms.BooleanField(
+        label="Exclude custom sections",
+        required=False,
+        help_text="Leave out the custom sections defined in your iThenticate account.",
+    )
+    turnitin_exclude_preprints = forms.BooleanField(
+        label="Exclude preprints",
+        required=False,
+        help_text="Leave matches against preprints out of the similarity score.",
+    )
+    turnitin_exclude_small_matches = forms.BooleanField(
+        label="Exclude small matches",
+        required=False,
+        help_text="Leave matches shorter than the word count below out of the similarity score.",
+    )
+    turnitin_small_match_words = forms.IntegerField(
+        label="Small match word count",
+        required=False,
+        min_value=plugin_settings.MIN_SMALL_MATCH_WORDS,
+        initial=plugin_settings.MIN_SMALL_MATCH_WORDS,
+        help_text="At least {}.".format(plugin_settings.MIN_SMALL_MATCH_WORDS),
+    )
+
+    def clean(self):
+        cleaned_data = super().clean()
+        if cleaned_data.get("turnitin_exclude_small_matches") and not cleaned_data.get(
+            "turnitin_small_match_words"
+        ):
+            self.add_error(
+                "turnitin_small_match_words",
+                "Enter the word count for excluding small matches.",
+            )
+        if not cleaned_data.get("turnitin_small_match_words"):
+            cleaned_data["turnitin_small_match_words"] = (
+                plugin_settings.MIN_SMALL_MATCH_WORDS
+            )
+        return cleaned_data
+
+
+class TurnitinJournalForm(ReportOptionsForm):
     turnitin_enabled = forms.BooleanField(
         label="Turnitin Core API enabled",
         required=False,
@@ -48,7 +116,7 @@ class TurnitinJournalForm(forms.Form):
     )
 
 
-class TurnitinAdminForm(forms.Form):
+class TurnitinAdminForm(ReportOptionsForm):
     """The install-wide Turnitin account settings, shared by every journal."""
 
     turnitin_api_url = forms.CharField(

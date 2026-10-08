@@ -21,6 +21,9 @@
                 <div class="large-7 columns">
                     <form method="POST">
                         {% csrf_token %}
+                        <p>The report options are sent when a similarity report
+                            is generated, and start from this install's defaults.
+                            Editors can still change them in the report viewer.</p>
                         {{ journal_form|foundation }}
                         <button class="button success" type="submit">
                             <i class="fa fa-save">&nbsp;</i>Save

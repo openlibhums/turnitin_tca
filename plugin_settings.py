@@ -24,12 +24,31 @@ MANAGER_URL = "turnitin_tca_manager"
 JANEWAY_VERSION = "1.7.0"
 IS_WORKFLOW_PLUGIN = False
 
+# The exclusion options sent in the Generate Report request's view_settings.
+# Staff set install-wide defaults and each journal can override them.
+REPORT_EXCLUSION_OPTIONS = [
+    "exclude_quotes",
+    "exclude_bibliography",
+    "exclude_citations",
+    "exclude_abstract",
+    "exclude_methods",
+    "exclude_custom_sections",
+    "exclude_preprints",
+    "exclude_small_matches",
+]
+SMALL_MATCH_WORDS_SETTING = "turnitin_small_match_words"
+# Turnitin's minimum for exclude_small_matches.
+MIN_SMALL_MATCH_WORDS = 8
+REPORT_OPTION_NAMES = ["turnitin_" + option for option in REPORT_EXCLUSION_OPTIONS] + [
+    SMALL_MATCH_WORDS_SETTING
+]
+
 # An install has one Turnitin account, so its settings are install-wide: staff
-# set them once and every journal uses them. Each journal only chooses whether
-# to use Turnitin.
+# set them once and every journal uses them. Each journal chooses whether to
+# use Turnitin and can override the install's report options.
 JOURNAL_SETTING_NAMES = [
     "turnitin_enabled",
-]
+] + REPORT_OPTION_NAMES
 
 # Install-wide settings editable from the install settings form. The webhook
 # secret and id are managed by the webhook registration flow, not edited by
