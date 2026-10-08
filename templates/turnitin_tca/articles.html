@@ -1,0 +1,71 @@
+{% extends "admin/core/base.html" %}
+
+{% block page_title %}Turnitin Similarity{% endblock page_title %}
+{% block title %}Turnitin Similarity{% endblock %}
+{% block title-section %}Turnitin Similarity{% endblock %}
+{% block title-sub %}Articles from submission to the end of review{% endblock %}
+
+{% block breadcrumbs %}
+    {{ block.super }}
+    <li>Turnitin Similarity</li>
+{% endblock %}
+
+{% block body %}
+    {% if not enabled %}
+        <div class="box">
+            <div class="content">
+                <div class="callout warning">
+                    Turnitin Core API is not configured for this journal. An editor
+                    can set it up under
+                    <a href="{% url 'turnitin_tca_manager' %}">Turnitin Core API settings</a>.
+                </div>
+            </div>
+        </div>
+    {% endif %}
+    <div class="box">
+        <div class="title-area">
+            <h2>Articles</h2>
+        </div>
+        <div class="content">
+            <p>Choose an article to send its files to Turnitin or open its similarity
+                reports.</p>
+            <table class="scroll small">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Title</th>
+                        <th>Stage</th>
+                        <th>Submitted</th>
+                        <th>Files sent</th>
+                        <th>Highest similarity</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for article in articles %}
+                        <tr>
+                            <td>{{ article.pk }}</td>
+                            <td>{{ article.title|safe }}</td>
+                            <td>{{ article.stage }}</td>
+                            <td>{{ article.date_submitted|date:"Y-m-d"|default:"—" }}</td>
+                            <td>{{ article.turnitin_count }}</td>
+                            <td>
+                                {% if article.turnitin_max_score != None %}
+                                    {{ article.turnitin_max_score }}%
+                                {% else %}—{% endif %}
+                            </td>
+                            <td>
+                                <a class="button tiny"
+                                   href="{% url 'turnitin_tca_article' article.pk %}">
+                                    <i class="fa fa-check-circle">&nbsp;</i>Similarity
+                                </a>
+                            </td>
+                        </tr>
+                    {% empty %}
+                        <tr><td colspan="7">No articles are awaiting or in review.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+{% endblock %}

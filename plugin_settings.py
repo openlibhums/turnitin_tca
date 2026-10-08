@@ -196,6 +196,14 @@ def hook_registry():
             "module": "plugins.turnitin_tca.hooks",
             "function": "review_action_hook",
         },
+        "in_review_editor_actions": {
+            "module": "plugins.turnitin_tca.hooks",
+            "function": "review_action_hook",
+        },
+        "journal_editor_nav_block": {
+            "module": "plugins.turnitin_tca.hooks",
+            "function": "nav_hook",
+        },
     }
 
 

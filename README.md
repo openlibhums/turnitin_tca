@@ -2,9 +2,14 @@
 
 Sends manuscript, data/figure, source, revision and review-round files to the [Turnitin Core API](https://developers.turnitin.com/turnitin-core-api) (TCA) for similarity reports, and surfaces the results from the editorial workflow.
 
+## Compatibility
+
+Works with Janeway 1.7.x, 1.8.x and later. On 1.7 editors reach the similarity pages from the **Turnitin Similarity** nav link; 1.8 also adds the action to the In Review page, and later versions to the Unassigned page too.
+
 ## Features
 
-- Adds a **Turnitin Similarity** action to the editor Actions block on both the Unassigned and In Review pages (via the `unassigned_additional_actions` and `review_actions` hooks).
+- Adds a **Turnitin Similarity** link to the editor nav, listing the journal's articles from submission to the end of review (via the `journal_editor_nav_block` hook). Each article links to its similarity page.
+- Adds a **Turnitin Similarity** action to the editor Actions block on the In Review page (via `review_actions`, or `in_review_editor_actions` on Janeway 1.8), and on the Unassigned page where Janeway provides `unassigned_additional_actions`.
 - A per-article page listing every file an editor can send, with the current report status, similarity score, and a link to the Turnitin viewer.
 - Sends a file (Create Submission then Upload File) and, once Turnitin reports the upload as processed, automatically requests the similarity report.
 - A webhook receiver (`SUBMISSION_COMPLETE` / `SIMILARITY_COMPLETE`) that stores the score and emails the requesting editor. Incoming webhooks are verified against a shared signing secret. This is the primary mechanism for advancing submissions.

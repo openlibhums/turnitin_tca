@@ -34,6 +34,11 @@ urlpatterns = [
         name="turnitin_tca_delete_webhook",
     ),
     re_path(
+        r"^articles/$",
+        views.articles,
+        name="turnitin_tca_articles",
+    ),
+    re_path(
         r"^article/(?P<article_id>\d+)/$",
         views.article_reports,
         name="turnitin_tca_article",
