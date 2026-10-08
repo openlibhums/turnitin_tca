@@ -36,7 +36,10 @@ def journal_manager(request):
         journal_form = forms.TurnitinJournalForm(request.POST)
         if journal_form.is_valid():
             for name, value in journal_form.cleaned_data.items():
-                logic.save_setting(name, value, request.journal)
+                if name in plugin_settings.REPORT_OPTION_NAMES:
+                    logic.save_report_option(name, value, request.journal)
+                else:
+                    logic.save_setting(name, value, request.journal)
             messages.add_message(
                 request,
                 messages.SUCCESS,
@@ -60,7 +63,8 @@ def journal_manager(request):
 @staff_member_required
 def install_manager(request):
     initial = {
-        name: logic.get_setting(name, None) for name in plugin_settings.SETTING_NAMES
+        name: logic.get_setting(name, None)
+        for name in plugin_settings.SETTING_NAMES + plugin_settings.REPORT_OPTION_NAMES
     }
     admin_form = forms.TurnitinAdminForm(initial=initial)
 

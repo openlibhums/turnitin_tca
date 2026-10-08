@@ -528,6 +528,22 @@ def send_file_from_request(request, article, file_obj, eula_block=None):
     return article_url
 
 
+def report_view_settings(journal):
+    """The Generate Report exclusion options: the journal's, or the install's."""
+    view_settings = {
+        option: bool(get_setting("turnitin_" + option, journal))
+        for option in plugin_settings.REPORT_EXCLUSION_OPTIONS
+    }
+    # Turnitin takes a word count rather than true or false, and the option is
+    # left out when small matches are not excluded.
+    if view_settings.pop("exclude_small_matches"):
+        view_settings["exclude_small_matches"] = max(
+            get_setting(plugin_settings.SMALL_MATCH_WORDS_SETTING, journal) or 0,
+            plugin_settings.MIN_SMALL_MATCH_WORDS,
+        )
+    return view_settings
+
+
 def request_similarity_report(submission, interactive=False):
     """Ask TCA to generate the similarity report for a processed submission.
 
@@ -545,10 +561,7 @@ def request_similarity_report(submission, interactive=False):
             "search_repositories": plugin_settings.DEFAULT_SEARCH_REPOSITORIES,
             "auto_exclude_self_matching_scope": "ALL",
         },
-        "view_settings": {
-            "exclude_quotes": False,
-            "exclude_bibliography": False,
-        },
+        "view_settings": report_view_settings(journal),
     }
     submission.report_attempts += 1
     submission.save()
@@ -766,6 +779,22 @@ def save_setting(name, value, journal):
         value,
         setting_journal(name, journal),
     )
+
+
+def save_report_option(name, value, journal):
+    """Save a journal's report option only where it differs from the install's.
+
+    A journal that matches the install default keeps no value of its own, so
+    it follows the default if staff change it later.
+    """
+    if value == get_setting(name, None):
+        core_models.SettingValue.objects.filter(
+            setting__group__name="plugin:{}".format(get_plugin().name),
+            setting__name=name,
+            journal=journal,
+        ).delete()
+    else:
+        save_setting(name, value, journal)
 
 
 def adopt_journal_settings():

@@ -441,6 +441,46 @@ class TurnitinViewTest(TestCase):
         )
         configure_journal(self.journal_one)
 
+    def test_journal_keeps_no_report_option_matching_the_install(self):
+        self.client.force_login(self.editor)
+        self.client.post(
+            reverse("turnitin_tca_manager"),
+            data={
+                "turnitin_enabled": "on",
+                "turnitin_exclude_bibliography": "on",
+                "turnitin_small_match_words": "8",
+            },
+            SERVER_NAME=self.journal_one.domain,
+        )
+        stored = set(
+            core_models.SettingValue.objects.filter(
+                setting__group__name="plugin:turnitin_tca",
+                setting__name__in=tca_settings.REPORT_OPTION_NAMES,
+                journal=self.journal_one,
+            ).values_list("setting__name", flat=True)
+        )
+        # Only the option that differs from the install default is stored, so
+        # the rest follow the install if staff change them.
+        self.assertEqual(stored, {"turnitin_exclude_bibliography"})
+        logic.save_setting("turnitin_exclude_quotes", True, None)
+        self.assertTrue(logic.get_setting("turnitin_exclude_quotes", self.journal_one))
+        logic.save_setting("turnitin_exclude_quotes", False, None)
+        logic.save_report_option(
+            "turnitin_exclude_bibliography",
+            False,
+            self.journal_one,
+        )
+
+    def test_small_match_word_count_must_be_at_least_eight(self):
+        form = forms.TurnitinJournalForm(
+            data={
+                "turnitin_exclude_small_matches": "on",
+                "turnitin_small_match_words": "5",
+            },
+        )
+        self.assertFalse(form.is_valid())
+        self.assertIn("turnitin_small_match_words", form.errors)
+
     def test_install_settings_apply_to_every_journal(self):
         self.client.force_login(self.staff)
         fake_client = mock.Mock()
@@ -1377,6 +1417,52 @@ class TurnitinRetryTest(TestCase):
         self.assertNotIn("add_to_index", payload["metadata"])
         self.report_failed.refresh_from_db()
         self.assertEqual(self.report_failed.report_attempts, 1)
+
+    def test_report_options_default_to_off(self):
+        fake_client = mock.Mock()
+        with mock.patch.object(logic, "get_client", return_value=fake_client):
+            logic.request_similarity_report(self.report_failed)
+        settings_sent = fake_client.generate_similarity_report.call_args.args[1]
+        self.assertEqual(
+            settings_sent["view_settings"],
+            {
+                "exclude_quotes": False,
+                "exclude_bibliography": False,
+                "exclude_citations": False,
+                "exclude_abstract": False,
+                "exclude_methods": False,
+                "exclude_custom_sections": False,
+                "exclude_preprints": False,
+            },
+        )
+
+    def test_report_options_follow_install_unless_journal_overrides(self):
+        logic.save_setting("turnitin_exclude_quotes", True, None)
+        logic.save_setting("turnitin_exclude_methods", True, None)
+        logic.save_setting("turnitin_exclude_methods", False, self.journal_one)
+        view_settings = logic.report_view_settings(self.journal_one)
+        self.assertTrue(view_settings["exclude_quotes"])
+        self.assertFalse(view_settings["exclude_methods"])
+        logic.save_setting("turnitin_exclude_quotes", False, None)
+        logic.save_setting("turnitin_exclude_methods", False, None)
+
+    def test_small_matches_sends_word_count_of_at_least_eight(self):
+        logic.save_setting("turnitin_exclude_small_matches", True, self.journal_one)
+        logic.save_setting("turnitin_small_match_words", 12, self.journal_one)
+        self.assertEqual(
+            logic.report_view_settings(self.journal_one)["exclude_small_matches"],
+            12,
+        )
+        logic.save_setting("turnitin_small_match_words", 3, self.journal_one)
+        self.assertEqual(
+            logic.report_view_settings(self.journal_one)["exclude_small_matches"],
+            8,
+        )
+        logic.save_setting("turnitin_exclude_small_matches", False, self.journal_one)
+        self.assertNotIn(
+            "exclude_small_matches",
+            logic.report_view_settings(self.journal_one),
+        )
 
     def test_index_setting_off_sends_false(self):
         configure_journal(self.journal_one, turnitin_index_submissions=False)
