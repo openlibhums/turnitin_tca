@@ -467,10 +467,12 @@ class TurnitinViewTest(TestCase):
         url = reverse("turnitin_tca_manager")
         get_response = self.client.get(url, SERVER_NAME=self.journal_one.domain)
         self.assertEqual(get_response.status_code, 200)
-        self.assertEqual(
-            list(get_response.context["journal_form"].fields),
-            ["turnitin_enabled"],
-        )
+        journal_fields = list(get_response.context["journal_form"].fields)
+        self.assertIn("turnitin_enabled", journal_fields)
+        # Journals can override report options, but never the account.
+        for field in forms.TurnitinAdminForm.base_fields:
+            if field not in forms.ReportOptionsForm.base_fields:
+                self.assertNotIn(field, journal_fields)
 
         post_response = self.client.post(
             url,
@@ -1818,8 +1820,10 @@ class TurnitinResendViewTest(TestCase):
         staff = helpers.create_editor(
             self.journal_one,
             email="staff-editor@example.com",
-            is_staff=True,
         )
+        # create_editor only applies extra attributes from Janeway 1.9.
+        staff.is_staff = True
+        staff.save()
         self.client.force_login(staff)
         response = self.client.get(
             reverse(
