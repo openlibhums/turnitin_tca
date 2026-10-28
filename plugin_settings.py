@@ -14,7 +14,7 @@ DESCRIPTION = (
     "similarity reports and view the results from the editorial workflow."
 )
 AUTHOR = "Open Library of Humanities"
-VERSION = "0.1"
+VERSION = "1.1.0"
 # Sent as the X-Turnitin-Integration-Name / -Version headers, which identify
 # this integration (not the journal) to Turnitin.
 INTEGRATION_NAME = "Janeway"
